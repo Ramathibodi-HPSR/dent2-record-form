@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap">
-<link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="style.css?v=1.0.1">
+<link rel="stylesheet" href="app.css?v=1.0.1">
 </head>
 <body>
 <header class="topbar">
@@ -18,9 +18,11 @@
     <span class="acct-box" id="acctBox" hidden>
       <span class="acct-chip" id="acctChip"></span>
       <label class="field field--inline" id="provBox" hidden>ผู้บันทึก<select id="provSel" aria-label="ผู้ตรวจหรือผู้ให้บริการที่ใช้เครื่องนี้"></select></label>
+      <button class="btn btn--ghost" type="button" id="reloadBtn" title="ดึงข้อมูลล่าสุด เช่น ที่บันทึกจากอีกเครื่องของหน่วย">โหลดข้อมูลใหม่</button>
       <button class="btn btn--ghost" type="button" id="logoutBtn">ออกจากระบบ</button>
     </span>
-    <span class="draft" id="verTag">v1.0 · ทดสอบ</span>
+    <a class="btn btn--ghost guide-link" href="guide.html" target="_blank" rel="noopener">คู่มือ</a>
+    <span class="draft" id="verTag">v1.0</span>
   </div>
   <nav class="wrap tabs" id="tabs" role="tablist" aria-label="หน้าจอ" hidden></nav>
 </header>
@@ -57,10 +59,10 @@
     </div>
     <div class="qchips" id="qchips" role="group" aria-label="ตัวกรองด่วน"></div>
     <div class="filters">
-      <label class="field">ค้นหารหัสนักเรียน<input id="kfQ" type="search" placeholder="เช่น 53-001" autocomplete="off"></label>
+      <label class="field">ค้นหารหัสนักเรียน<input id="kfQ" type="search" placeholder="เช่น 53-001" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
       <label class="field">ห้อง<select id="kfCls"></select></label>
       <label class="field">ความเสี่ยง<select id="kfRisk"><option value="all">ทุกระดับ</option><option value="low">เสี่ยงต่ำ</option><option value="high">เสี่ยงสูง</option><option value="vhigh">เสี่ยงสูงมาก</option></select></label>
-      <label class="field">สถานะ<select id="kfSt"><option value="all">ทั้งหมด</option><option value="miss">ขาดบริการ (เลยกำหนด)</option><option value="due">ถึงกำหนดเดือนนี้</option><option value="ref">ส่งต่อแล้ว รอผล</option><option value="ok">ครบตามแผน</option><option value="absent">ยังไม่ได้ตรวจ</option></select></label>
+      <label class="field">สถานะ<select id="kfSt"><option value="all">ทั้งหมด</option><option value="miss">ขาดบริการ (เลยกำหนด)</option><option value="due">ถึงกำหนดเดือนนี้</option><option value="ref">ส่งต่อแล้ว รอผล</option><option value="ok">ครบตามแผน</option><option value="absent">ยังไม่ได้ตรวจ</option><option value="refneed">ต้องส่งต่อหรือรักษาโพรงประสาท</option></select></label>
       <label class="field">ยังไม่ได้รับ<select id="kfMiss"><option value="all">ทุกบริการ</option><option value="seal">เคลือบหลุมร่องฟัน</option><option value="fl">ฟลูออไรด์</option><option value="recall">ตรวจติดตาม</option><option value="tx">รักษา</option><option value="ref">ส่งต่อ</option><option value="brush">ฝึกแปรงฟัน</option></select></label>
       <label class="field">จัดกลุ่มตาม<select id="kfGroup"><option value="cls">ห้องเรียน</option><option value="miss">สิ่งที่ยังไม่ได้รับ</option><option value="risk">ความเสี่ยง</option><option value="none">ไม่จัดกลุ่ม</option></select></label>
     </div>
@@ -80,6 +82,7 @@
   <section>
     <button class="linkbtn" type="button" data-go="kids">← นักเรียนทั้งหมด</button>
     <div class="stack"><h2 id="enTitle">ลงทะเบียนนักเรียน</h2><p class="small muted" id="enSub">ระบบไม่เก็บชื่อ เลขบัตรประชาชน หรือข้อมูลผู้ปกครอง รหัสนักเรียนออกให้อัตโนมัติเมื่อบันทึก ให้เขียนรหัสไว้ข้างชื่อเด็กในรายชื่อของหน่วย</p></div>
+    <div id="enDone" aria-live="polite"></div>
     <form class="stack" id="enForm" novalidate>
       <div class="card stack">
         <h3>นักเรียน</h3>
@@ -87,7 +90,7 @@
           <label class="field">โรงเรียน<select id="enSchool" required></select></label>
           <label class="field">ห้อง<select id="enClass" required></select></label>
           <label class="field">เพศ<select id="enSex" required><option value="">– เลือก –</option><option value="M">ชาย</option><option value="F">หญิง</option></select></label>
-          <label class="field">เดือนปีเกิด (ค.ศ.)<input id="enBym" type="month"></label>
+          <label class="field">เดือนปีเกิด (ค.ศ.)<input id="enBym" type="month" placeholder="ปี ค.ศ.-เดือน เช่น 2019-05" autocomplete="off"></label>
         </div>
       </div>
       <div class="card stack">
@@ -110,7 +113,7 @@
         </div>
       </div>
       <div id="enMsg" aria-live="polite"></div>
-      <div class="row"><button class="btn btn--primary" type="submit" id="enSave">บันทึกการลงทะเบียน</button><button class="linkbtn" type="button" data-go="kids">ยกเลิก</button></div>
+      <div class="row"><button class="btn btn--primary" type="submit" id="enSave">บันทึกการลงทะเบียน</button><button class="btn" type="submit" id="enSaveNext">บันทึกแล้วลงทะเบียนคนถัดไป</button><button class="linkbtn" type="button" data-go="kids">ยกเลิก</button></div>
     </form>
   </section>
 </div>
@@ -123,7 +126,7 @@
       <label class="field">เปิดแฟ้ม<select id="kidSel"></select></label>
     </div>
     <div class="card stack" id="fileHead"></div>
-    <div class="subtabs" role="tablist" aria-label="แฟ้มนักเรียน">
+    <div class="subtabs" id="fileTabs" role="tablist" aria-label="แฟ้มนักเรียน">
       <button type="button" role="tab" id="ft-exam" aria-controls="fp-exam" data-ft="exam">ผลตรวจ</button>
       <button type="button" role="tab" id="ft-plan" aria-controls="fp-plan" data-ft="plan">แผนการดูแล</button>
       <button type="button" role="tab" id="ft-tx" aria-controls="fp-tx" data-ft="tx">บริการที่บันทึก</button>
@@ -136,7 +139,7 @@
       <section>
         <h3>การตรวจครั้งนี้</h3>
         <div class="grid g4">
-          <label class="field">การตรวจ<select id="vRound"><option value="baseline">ครั้งที่ 1 (ครั้งแรก)</option><option value="m6" disabled>ครั้งที่ 2 (6 เดือน) · v1.3</option><option value="m12" disabled>ครั้งที่ 3 (12 เดือน) · v1.3</option></select></label>
+          <label class="field">การตรวจ<select id="vRound"><option value="baseline">ครั้งที่ 1 (ครั้งแรก)</option><option value="m6" disabled>ครั้งที่ 2 (6 เดือน) · เปิดใช้ภายหลัง</option><option value="m12" disabled>ครั้งที่ 3 (12 เดือน) · เปิดใช้ภายหลัง</option></select></label>
           <label class="field">วันที่ตรวจ<input id="vDate" type="date"></label>
           <label class="field">รหัสผู้ตรวจ (ผ่านการปรับมาตรฐาน)<select id="vExam"></select></label>
           <label class="field">สถานที่<select id="vPlace"><option value="van">รถทันตกรรมที่โรงเรียน</option><option value="school">ที่โรงเรียน</option><option value="clinic">ที่หน่วยบริการ</option></select></label>
@@ -170,7 +173,7 @@
       <section>
         <div class="row between">
           <h3>ส่วนที่ 2 · แผนภูมิฟัน ICDAS (ฟันชุดผสม)</h3>
-          <button class="btn" type="button" id="presetBtn">ตั้งค่าเริ่มต้น: ช่องปากเด็ก 7 ปีปกติ</button>
+          <button class="btn btn--ghost" type="button" id="presetBtn">ตั้งค่าเริ่มต้น: ช่องปากเด็ก 7 ปีปกติ</button>
         </div>
         <p class="small muted">แตะเลขซี่เพื่อวงกลมซี่ที่พบ (บน: ฟันน้ำนม · ล่าง: ฟันแท้ แตะซ้ำเพื่อยกเลิก) แตะกล่องรหัสเพื่อแก้ Code A · Code B · ความต้องการการรักษา ป้าย "ผุ" ขึ้นเองเมื่อ ICDAS ≥3</p>
         <div class="chartwrap">
@@ -199,7 +202,8 @@
             <tbody id="pigiBody"></tbody>
           </table>
         </div>
-        <p class="small muted">คะแนน 0–3 ต่อซี่ ตามแบบฟอร์ม final ถ้าฟันดัชนียังไม่ขึ้นให้ใช้ซี่ข้างเคียงตามที่ทีมทันตกรรมกำหนด</p>
+        <label class="chk"><input type="checkbox" id="pigiSkip"> ไม่ได้ตรวจ PI/GI ครั้งนี้</label>
+        <p class="small muted">คะแนน 0–3 ต่อซี่ ตามแบบฟอร์ม final กรอกให้ครบ 12 ช่อง หรือติ๊ก "ไม่ได้ตรวจ PI/GI ครั้งนี้" ถ้าฟันดัชนียังไม่ขึ้นให้ใช้ซี่ข้างเคียงตามที่ทีมทันตกรรมกำหนด</p>
       </section>
 
       <section>
@@ -224,6 +228,7 @@
         <span>– ไม่อยู่ในแผนเดือนนั้น</span>
       </div>
       <div class="pgridwrap" id="planGrid"></div>
+      <p class="printonly small">○ = นัดให้บริการในเดือนนั้น<br>✓ = ให้บริการแล้ว<br>! = เลยกำหนด ยังไม่ได้ให้บริการ<br>– = ไม่มีนัด</p>
       <p class="small muted noprint" id="planHint"></p>
     </section>
     <section>
@@ -283,12 +288,12 @@
         </select></label>
         <label class="field">วันที่<input id="gDate" type="date"></label>
         <label class="field">ระยะเวลา (นาที)<input id="gMin" type="number" min="5" max="240" value="30"></label>
-        <label class="field">หัวข้อ<input id="gTopic" type="text" value="ขนมหวานกับฟันผุ"></label>
+        <label class="field">หัวข้อ<input id="gTopic" type="text" placeholder="เช่น ขนมหวานกับฟันผุ" autocomplete="off"></label>
       </div>
       <fieldset class="rooms" id="gRooms"><legend class="small muted">ห้อง</legend></fieldset>
       <div class="row"><button class="btn" type="button" id="gAll">ทำให้ทุกคน</button><button class="linkbtn" type="button" id="gNone">ล้างรายชื่อ</button><span class="small muted" id="gCount"></span></div>
       <div class="plist" id="gList" aria-label="ผู้เข้าร่วม"></div>
-      <p class="small muted">หลักฐาน: รูปกิจกรรมและรายชื่อที่ครูประจำชั้นลงนาม เก็บไว้ที่หน่วย (D-62) การแนบไฟล์ในระบบอยู่ในรุ่นถัดไป</p>
+      <p class="small muted">หลักฐาน: รูปกิจกรรมและรายชื่อที่ครูประจำชั้นลงนาม เก็บไว้ที่หน่วย การแนบไฟล์ในระบบอยู่ในรุ่นถัดไป</p>
       <div class="preview" id="gPreview" aria-live="polite"></div>
       <div class="row"><button class="btn btn--primary" type="submit" id="gSave">บันทึกกิจกรรม</button></div>
     </form>
@@ -300,7 +305,7 @@
       <label class="field">เดือนที่ให้บริการ<select id="lMonth"></select></label>
       <label class="field">สถานะ<select id="lStatus"></select></label>
       <label class="field">ประเภท<select id="lKind"><option value="all">ทั้งหมด</option><option value="one">รายคน</option><option value="group">กิจกรรมกลุ่ม</option><option value="extra">นอกแผน</option><option value="flag">มีข้อสังเกต</option></select></label>
-      <label class="field">ค้นหารหัสนักเรียน<input id="lQ" type="search" placeholder="เช่น 53-001" autocomplete="off"></label>
+      <label class="field">ค้นหารหัสนักเรียน<input id="lQ" type="search" placeholder="เช่น 53-001" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
     </div>
     <div class="tablewrap">
       <table class="ledger">
@@ -309,7 +314,7 @@
       </table>
     </div>
     <div class="row"><button class="btn" type="button" id="ledgerMore">แสดงเพิ่ม</button><span class="small muted" id="ledgerCount"></span></div>
-    <p class="small muted">มูลค่าอ้างอิงใช้ราคาจากการศึกษาต้นทุน ยอดที่จ่ายจริงคำนวณตามอัตราค่าบริการของรูปแบบการจ่ายของหน่วย (fee schedule) โดยทีมวิจัย</p>
+    <p class="small muted">มูลค่าอ้างอิงใช้ราคาจากการศึกษาต้นทุน ยอดที่จ่ายจริงคำนวณตามอัตราค่าบริการของรูปแบบการจ่ายของหน่วยโดยทีมวิจัย</p>
   </section>
 </div>
 
@@ -328,7 +333,7 @@
 <div class="tip-float" id="ftip" role="tooltip" hidden></div>
 
 <script src="vendor/supabase.js"></script>
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=1.0.1"></script>
+<script src="app.js?v=1.0.1"></script>
 </body>
 </html>

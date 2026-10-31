@@ -25,16 +25,54 @@ const el = (tag, attrs = {}, ...kids) => {
   for (const c of kids) if (c != null && c !== false) e.append(c);
   return e;
 };
+// Elements added in v1.0.1 may be missing from a cached old index.html: set them softly (R2-01).
+const setIf = (sel, key, v) => { const e = $(sel); if (e) e[key] = v; };
+// replaceChildren() prints null and false as text ("null"); this skips them, like el() does (R1-01).
+const fill = (node, ...kids) => node.replaceChildren(...kids.filter(c => c != null && c !== false));
 const TH_M = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 const thDate = d => `${d.getDate()} ${TH_M[d.getMonth()]} ${d.getFullYear() + 543}`;
 const thShort = d => `${d.getDate()} ${TH_M[d.getMonth()]} ${String(d.getFullYear() + 543).slice(2)}`;
 const thMon = d => `${TH_M[d.getMonth()]} ${String(d.getFullYear() + 543).slice(2)}`;
-const addMonths = (d, m) => { const x = new Date(d); x.setMonth(x.getMonth() + m); return x; };
+// Same day m months later, clamped to the month's last day (31 Oct + 1 = 30 Nov, not 1 Dec) (R1-12).
+const addMonths = (d, m) => { const x = new Date(d.getFullYear(), d.getMonth() + m, 1); x.setDate(Math.min(d.getDate(), new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate())); return x; };
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const monKey = d => `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;   // sortable month key (0-based month)
+const monKeyLabel = key => { const [y, m] = key.split('-').map(Number); return thMon(new Date(y, m, 1)); };
 const toInput = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const fromInput = s => { const [y, m, dd] = String(s || '').split('-').map(Number); return y && m && dd ? new Date(y, m - 1, dd) : null; };
 const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 let TODAY = startOfDay(new Date());
 const monthOf = (base, d) => Math.min(12, Math.max(1, Math.round((d - base) / 864e5 / 30.44)));
+// Days that monthOf() puts into plan month m (month 1 starts on the exam day, month 12 has no end).
+const monthRange = (base, m) => ({ from: addDays(base, m === 1 ? 0 : Math.ceil((m - .5) * 30.44)), to: m === 12 ? null : addDays(base, Math.ceil((m + .5) * 30.44) - 1) });
+// Plan month a service fills: the plan_month it was ticked for, else the month of its date (R1-05).
+const txMonth = (k, t) => (t.planMonth != null ? t.planMonth : monthOf(k.base, t.date));
+// Date inputs take Christian-era years; the app shows Buddhist-era dates (R1-18).
+function dateProblem(s, label) {
+  if (!s) return '';
+  const y = +String(s).slice(0, 4);
+  if (y > 2400) return `${label}: ช่องวันที่ใช้ปี ค.ศ. (พ.ศ. ลบ 543) เช่น 2026`;
+  const d = fromInput(s);
+  if (!d) return `${label}: วันที่ไม่ถูกต้อง`;
+  if (d > TODAY) return `${label}อยู่ในอนาคต`;
+  return '';
+}
+// "= 31 ต.ค. 2569" under each date box, and a warning for a Buddhist-era year (R1-18).
+function beHint(inp) {
+  let h = inp.nextElementSibling;
+  if (!h || !h.classList.contains('be-hint')) { h = el('span', { class: 'be-hint tiny muted' }); inp.after(h); }
+  const v = inp.value.trim();
+  let t = '', warn = false;
+  if (v) {
+    const ym = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(v), d = fromInput(v);
+    if (+v.slice(0, 4) > 2400) { t = 'ช่องนี้ใช้ปี ค.ศ. (พ.ศ. ลบ 543) เช่น 2026'; warn = true; }
+    else if (inp.getAttribute('type') === 'month') { if (ym) t = `= ${TH_M[+ym[2] - 1]} ${+ym[1] + 543}`; else { t = 'ใส่ปี ค.ศ.-เดือน เช่น 2019-05'; warn = true; } }
+    else if (d) t = `= ${thDate(d)}`;
+  }
+  h.textContent = t;
+  h.classList.toggle('be-warn', warn);
+}
+const beAll = (root = document) => $$('input[type="date"], input[type="month"]', root).forEach(beHint);
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* per-device convenience only */ } };
 
@@ -94,7 +132,10 @@ function typicalMouth() {
   for (const pos of POS) m[pos] = PERM_EARLY.includes(pos) ? { t: 'p', A: 0, B: 0, act: null } : { t: 'd', A: 0, B: 0, act: null };
   return m;
 }
-const emptyPigi = () => Object.fromEntries(PIGI_TEETH.map(t => [t, { pi: 0, gi: 0 }]));
+// PI/GI start empty: a skipped section must not look like a real score of 0 (R1-14).
+const emptyPigi = () => Object.fromEntries(PIGI_TEETH.map(t => [t, { pi: null, gi: null }]));
+const pigiFilled = k => PIGI_TEETH.reduce((n, t) => n + (k.pigi[t].pi != null) + (k.pigi[t].gi != null), 0);   // of 12
+const pigiMean = (k, idx) => { const v = PIGI_TEETH.map(t => k.pigi[t][idx]).filter(x => x != null); return v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2) : '–'; };
 
 /* ================================================================ clinical logic (v0.7; dental team validates, WS2-3) */
 function riskScore(k) { let s = 0; for (const q of RISK) if (q.id) s += k.risk[q.id] === 'y' ? q.y : q.n; return s; }
@@ -130,7 +171,8 @@ function buildPlan(k) {
   rows.push({ key: 'study', code: 'STUDY', codes: [], label: 'ตรวจรอบโครงการ (เก็บข้อมูล)', sub: 'ค่าตอบแทน 100 บาทต่อการตรวจ แยกจากงบบริการ', months: [6, 12], study: true });
   const fl = flFreq(k);
   if (fl.f) rows.push({ key: 'fl', code: '170', codes: ['170'], label: 'เคลือบฟลูออไรด์', sub: `ทุก ${fl.f} เดือน · ${fl.why}`, months: range(fl.f), freqSel: fl.sel });
-  rows.push({ key: 'brush', code: '176', codes: ['176', '175'], label: 'ฝึกแปรงฟัน + อุปกรณ์', sub: 'ทำเป็นกิจกรรมกลุ่มได้ (หน้ากิจกรรมกลุ่มใน v1.1)', anytime: true });
+  const ku = S.units[k.unit];
+  rows.push({ key: 'brush', code: '176', codes: ['176', '175'], label: 'ฝึกแปรงฟัน + อุปกรณ์', sub: `ทำเป็นกิจกรรมกลุ่มได้ที่หน้า "${ku ? claimTab(ku) : 'บันทึกบริการ'}"`, anytime: true });
   const teethRows = [];
   for (const pos of [...FPM, ...POS.filter(p => !FPM.includes(p))]) {
     const t = k.teeth[pos];
@@ -138,7 +180,7 @@ function buildPlan(k) {
     if (n == null) continue;
     const no = toothNo(pos, t), prim = t.t === 'd', fpm = FPM.includes(pos) && t.t === 'p';
     const base = { tooth: no, anytime: true, prim };
-    const primNote = prim ? ' · ฟันน้ำนม นอกงบโครงการ (D-54)' : '';
+    const primNote = prim ? ' · ฟันน้ำนม ไม่นับในงบโครงการ' : '';
     if (n === 2 && fpm) {
       const occ = t.occ ?? t.B;
       teethRows.push({ ...base, key: `seal-${no}`, code: '171', codes: occ >= 3 ? ['171', '172'] : ['171'], label: 'เคลือบหลุมร่องฟัน', sub: (t.A === 1 || t.A === 7 ? 'เคลือบซ้ำ · ' : '') + (occ >= 1 ? `ICDAS ${occ} ด้านบดเคี้ยว` : 'ฟันกรามแท้ขึ้นแล้ว') + (t.partial ? ' · ขึ้นไม่เต็มซี่' : '') + (occ >= 3 ? ' · หรือ PRR' : '') });
@@ -182,7 +224,7 @@ const chipText = (row, m) => {
   const c = catOf(row);
   if (c === 'seal') return `เคลือบ ${row.tooth}`;
   if (c === 'fl') return `ฟลูออไรด์ ด.${m}`;
-  if (c === 'recall') return `ตรวจติดตาม ด.${m}`;
+  if (c === 'recall') return m === 1 ? 'ติ๊กบริการตรวจ ด.1' : `ตรวจติดตาม ด.${m}`;   // month 1 is the first exam (R1-03)
   if (c === 'brush') return 'ฝึกแปรงฟัน';
   if (c === 'ref') return `ส่งต่อ${row.tooth ? ' ' + row.tooth : ''}`;
   return `${pshort(row.code)} ${row.tooth ?? ''}`.trim();
@@ -204,7 +246,7 @@ function kidState(u, k) {
     for (const m of row.months) {
       if (m > cm) { if (!next || m < next.m) next = { m, t: row.label }; continue; }
       total++;
-      if (txs.some(t => monthOf(k.base, t.date) === m)) done++;
+      if (txs.some(t => txMonth(k, t) === m)) done++;
       else { (m < cm ? miss : due).push({ c: catOf(row), t: chipText(row, m) }); cats.add(catOf(row)); }
     }
   }
@@ -214,13 +256,15 @@ const stFlags = st => ({ absent: st.absent, miss: st.miss.length > 0, due: st.du
 
 /* ================================================================ data: load and map */
 const S = {
-  me: null, units: {}, acct: null, tab: 'home', kid: null, ftab: 'exam', sel: 16, prov: '', editId: null, newId: null, gsel: new Set(),
+  me: null, units: {}, acct: null, tab: 'home', kid: null, ftab: 'exam', sel: 16, prov: '', editId: null, newId: null, gsel: new Set(), loadedAt: 0, enBatch: [],
   kf: { q: '', cls: 'all', risk: 'all', st: 'all', miss: 'all', group: 'cls' },
   lf: { month: 'all', status: 'all', kind: 'all', q: '', limit: 40 },
 };
 const unit = () => S.units[S.acct];
 const curKid = () => (unit() ? unit().byId[S.kid] : null);
 const hasConsent = k => !!(k.c.consent_on && k.c.assent);
+// Per-child services need complete consent and an enrolled (not withdrawn) child (R1-20).
+const canServe = k => hasConsent(k) && k.c.status !== 'withdrawn';
 
 async function fetchAll(table, order) {
   const out = [];
@@ -236,7 +280,7 @@ async function fetchAll(table, order) {
 }
 function txFrom(s) {
   return { id: s.id, kid: s.study_id, code: s.code, tooth: s.tooth, date: fromInput(s.service_date), status: s.status, fromPlan: s.from_plan,
-    planKey: s.plan_key, by: s.provider || '', outcome: s.outcome, gid: s.group_id, gnote: s.group_note, n: s.n_participants, note: s.note, returnNote: s.return_note };
+    planKey: s.plan_key, planMonth: s.plan_month ?? null, by: s.provider || '', outcome: s.outcome, gid: s.group_id, gnote: s.group_note, n: s.n_participants, note: s.note, returnNote: s.return_note };
 }
 const clone = o => JSON.parse(JSON.stringify(o || {}));
 function applyExam(k, ex) {
@@ -247,6 +291,8 @@ function applyExam(k, ex) {
   k.risk = ex && ex.attended ? clone(ex.risk) : {};
   k.teeth = ex && ex.attended ? clone(ex.teeth) : null;
   k.pigi = ex && ex.attended && ex.pigi && Object.keys(ex.pigi).length ? { ...emptyPigi(), ...clone(ex.pigi) } : emptyPigi();
+  k.pigiSkip = !!(ex && ex.attended && !(ex.pigi && Object.keys(ex.pigi).length));   // saved as {} = PI/GI not done (R1-14)
+  k.showMiss = false;   // after a failed save, mark every missing item (R1-04)
   k.urgent = { pain: false, swell: false, big: false, ...(ex ? ex.urgent : {}) };
   k.needOv = ex ? clone(ex.need_override) : {};
   k.ovReason = ex ? clone(ex.override_reason) : {};
@@ -298,7 +344,15 @@ async function loadAll() {
 
 /* ================================================================ errors and toasts */
 let toastT = null;
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 4200); }
+// ms = 0 keeps the toast until the next tap. The toast sits above the save bar so it never covers "บันทึกผลตรวจ" (R1-04).
+function toast(msg, ms = 4200) {
+  const t = $('#toast'), bar = $('#saveBar');
+  t.textContent = msg; t.hidden = false;
+  t.style.bottom = bar.hidden ? '' : `calc(${bar.offsetHeight + 12}px + env(safe-area-inset-bottom, 0px))`;
+  clearTimeout(toastT);
+  if (ms) toastT = setTimeout(() => { t.hidden = true; }, ms);
+}
+const loadedText = () => { const d = new Date(S.loadedAt || Date.now()); return `ข้อมูล ณ ${thDate(TODAY)} เวลา ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} น.`; };
 function errText(e) {
   const m = String((e && (e.message || e.error_description)) || e || '');
   if (/row-level security|permission denied/i.test(m)) return 'บัญชีนี้ไม่มีสิทธิ์บันทึกข้อมูลนี้';
@@ -341,6 +395,7 @@ async function afterLogin() {
     S.me = me;
     TODAY = startOfDay(new Date());
     await loadAll();
+    S.loadedAt = Date.now();
   } catch (err) {
     main.replaceChildren(el('div', { class: 'err', text: 'โหลดข้อมูลไม่สำเร็จ · ' + errText(err) }), el('button', { class: 'btn', type: 'button', text: 'ลองใหม่', onclick: afterLogin }));
     return;
@@ -352,36 +407,87 @@ async function afterLogin() {
   const chip = $('#acctChip');
   if (S.me.role === 'unit') {
     const u = unit();
-    chip.replaceChildren(el('i', { class: 'key ' + ARM[u.arm].key }), el('b', { text: u.name }), u.is_test ? el('span', { class: 'testflag', text: 'ทดสอบ' }) : null);
+    fill(chip, el('i', { class: 'key ' + ARM[u.arm].key }), el('b', { text: u.name }), u.is_test ? el('span', { class: 'testflag', text: 'ทดสอบ' }) : null);
     const ps = $('#provSel');
-    ps.replaceChildren(el('option', { value: '', text: '– เลือก –' }), ...u.examiners.map(c => el('option', { value: c, text: c })));
+    ps.replaceChildren(el('option', { value: '', text: '– เลือกรหัสของคุณ –' }), ...u.examiners.map(c => el('option', { value: c, text: c })));
     S.prov = lsGet('dent2-prov-' + u.id) || '';
     if (!u.examiners.includes(S.prov)) S.prov = '';
     ps.value = S.prov;
+    ps.classList.toggle('is-missing', !S.prov);
     $('#provBox').hidden = false;
-    S.kid = u.kids[0] ? u.kids[0].id : null;
+    S.kid = null;   // the file tab waits for a chosen child (R1-19)
+    $('#verTag').textContent = u.is_test ? 'v1.0 · หน่วยทดสอบ' : 'v1.0';
   } else {
-    chip.replaceChildren(el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
+    fill(chip, el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
     $('#provBox').hidden = true;
+    $('#verTag').textContent = 'v1.0';
   }
   $('#acctBox').hidden = false;
   show(S.me.role === 'unit' ? 'home' : 'research');
 }
-$('#provSel').addEventListener('change', e => { S.prov = e.target.value; lsSet('dent2-prov-' + S.acct, S.prov); });
+$('#provSel').addEventListener('change', e => { S.prov = e.target.value; lsSet('dent2-prov-' + S.acct, S.prov); e.target.classList.toggle('is-missing', !S.prov); });
+// Every write that records "ผู้บันทึก" needs a chosen code; nothing falls back to a default examiner (R1-02).
+function needProv() {
+  if (S.prov) return true;
+  const p = $('#provSel'); p.classList.add('is-missing'); p.focus();
+  toast('เลือก "ผู้บันทึก" (รหัสของคุณ) ที่แถบด้านบนก่อนบันทึก');
+  return false;
+}
 
 async function logout(reason) {
+  // One login per unit (D-42): the next person on this device picks their own code.
+  if (S.acct && S.acct !== 'research') lsSet('dent2-prov-' + S.acct, '');
   await sb.auth.signOut();
-  Object.assign(S, { me: null, units: {}, acct: null, kid: null, editId: null });
+  Object.assign(S, { me: null, units: {}, acct: null, kid: null, editId: null, prov: '' });
   $('#tabs').hidden = true; $('#acctBox').hidden = true; hideSaveBar();
+  $('#verTag').textContent = 'v1.0';
   show('login');
   if (reason) $('#lgMsg').replaceChildren(el('div', { class: 'hint', text: reason }));
 }
 $('#logoutBtn').addEventListener('click', () => { if (dirtyGuard()) logout(); });
 
-// Shared clinic devices: sign out after 30 minutes without use.
-let lastAct = Date.now();
-['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, () => { lastAct = Date.now(); }, { passive: true }));
-setInterval(() => { if (S.me && Date.now() - lastAct > 30 * 60e3) logout('ออกจากระบบอัตโนมัติ เพราะไม่มีการใช้งาน 30 นาที ผลตรวจที่ยังไม่กดบันทึกจะไม่ถูกเก็บ'); }, 60e3);
+// Two devices on one unit login: reload on demand, and by itself when the tab comes back after 5 minutes (R1-09).
+let reloading = false;
+async function reloadData(auto) {
+  if (!S.me || reloading || busy) return;
+  const k = curKid();
+  if (auto ? k && k.dirty : !dirtyGuard()) return;
+  reloading = true;
+  setIf('#reloadBtn', 'disabled', true);
+  try {
+    TODAY = startOfDay(new Date());
+    await loadAll();
+    S.loadedAt = Date.now();
+    if (S.tab !== 'enrol') render(S.tab, true);   // a half-filled enrolment form keeps its values
+    if (!auto) toast('โหลดข้อมูลล่าสุดแล้ว');
+  } catch (e) { if (!auto) toast('โหลดข้อมูลไม่สำเร็จ · ' + errText(e)); }
+  finally { reloading = false; setIf('#reloadBtn', 'disabled', false); }
+}
+$('#reloadBtn')?.addEventListener('click', () => reloadData(false));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !S.me) return;
+  if (idleCheck()) return;
+  if (Date.now() - S.loadedAt > 5 * 60e3) reloadData(true);
+});
+
+// Shared clinic devices: warn after 25 minutes without use, sign out after 30 (R1-09).
+let lastAct = Date.now(), idleWarned = false;
+['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, () => {
+  lastAct = Date.now();
+  if (idleWarned) { idleWarned = false; $('#toast').hidden = true; }
+}, { passive: true }));
+function idleCheck() {
+  if (!S.me) return false;
+  const idle = Date.now() - lastAct;
+  if (idle > 30 * 60e3) { idleWarned = false; logout('ออกจากระบบอัตโนมัติ เพราะไม่มีการใช้งาน 30 นาที ผลตรวจที่ยังไม่กดบันทึกจะไม่ถูกเก็บ'); return true; }
+  if (idle > 25 * 60e3 && !idleWarned) {
+    idleWarned = true;
+    const k = curKid();
+    toast(`ไม่มีการใช้งาน 25 นาที ระบบจะออกจากระบบใน 5 นาที แตะหน้าจอเพื่อใช้งานต่อ${k && k.dirty ? ' (มีผลตรวจที่ยังไม่บันทึก)' : ''}`, 0);
+  }
+  return false;
+}
+setInterval(idleCheck, 30e3);
 
 function dirtyGuard() {
   const k = curKid();
@@ -396,13 +502,17 @@ function show(id) {
   for (const s of SCREENS) $('#' + s).hidden = s !== id;
   $$('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.getAttribute('aria-controls') === id)));
   S.tab = id;
+  render(id);
+  window.scrollTo({ top: 0 });
+}
+// keep = re-render after a data reload: forms on the claims page keep what the user already chose.
+function render(id, keep) {
   if (id === 'home') renderHome();
   else if (id === 'kids') renderKids();
   else if (id === 'enrol') renderEnrol();
   else if (id === 'file') renderFile();
-  else if (id === 'claims') { setupClaimsForm(); renderClaims(); }
+  else if (id === 'claims') { setupClaimsForm(keep); renderClaims(); }
   else if (id === 'research') renderResearch();
-  window.scrollTo({ top: 0 });
 }
 function openKid(id, ft) { if (S.kid !== id && !dirtyGuard()) return; S.kid = id; S.sel = 16; if (ft) S.ftab = ft; show('file'); }
 document.addEventListener('click', e => {
@@ -447,6 +557,11 @@ const exportButtons = () => el('div', { class: 'dl-list' }, ...EXPORTS.map(([v, 
 
 /* ================================================================ HOME (unit) */
 const tile = (label, value, sub) => el('div', { class: 'card tile' }, el('span', { class: 'tile__label', text: label }), el('span', { class: 'tile__value' }, value), sub ? el('span', { class: 'tiny muted', text: sub }) : null);
+// A home tile that opens the student cards filtered to what it counts (R1-19).
+const tileLink = (label, value, sub, st, go = 'ดูรายชื่อ →') => el('button', { type: 'button', class: 'card tile tile--link', 'aria-label': `${label} ${value} · ${go.replace(' →', '')}`,
+  onclick: () => { Object.assign(S.kf, { q: '', cls: 'all', risk: 'all', miss: 'all', st }); show('kids'); } },
+  el('span', { class: 'tile__label', text: label }), el('span', { class: 'tile__value' }, value), sub ? el('span', { class: 'tiny muted', text: sub }) : null,
+  el('span', { class: 'tile__go', text: go }));
 function needsReferral(k) { return examined(k) && (Object.values(k.urgent).some(Boolean) || POS.some(p => { const n = needOf(p, k); return n != null && n >= 5; })); }
 function renderHome() {
   const u = unit();
@@ -463,13 +578,14 @@ function renderHome() {
       el('div', { class: 'row between' },
         el('div', { class: 'stack' }, el('p', { class: 'eyebrow', text: `${schoolNames} · ลงทะเบียน ${n} คน` }), el('h1', { class: 'h-unit', text: u.name })),
         el('span', { class: 'chip chip--plain' }, el('i', { class: 'key ' + ARM[u.arm].key }), ARM[u.arm].name)),
-      el('p', { class: 'small muted', text: `ข้อมูล ณ ${thDate(TODAY)}${u.is_test ? ' · หน่วยทดสอบ ใช้ข้อมูลสมมติเท่านั้น' : ''}` }),
+      el('p', { class: 'small muted', text: `${loadedText()}${u.is_test ? ' · หน่วยทดสอบ ใช้ข้อมูลสมมติเท่านั้น' : ''}` }),
       el('div', { class: 'tiles' },
         tile('ลงทะเบียน', `${n} คน`, noConsent ? `ยังไม่มีความยินยอมครบ ${noConsent} คน` : 'มีความยินยอมครบทุกคน'),
-        tile('ตรวจครั้งแรกแล้ว', `${ex}/${n}`, absent ? `ขาดเรียนวันตรวจ ${absent} คน` : ''),
+        tileLink('ตรวจครั้งแรกแล้ว', `${ex}/${n}`, absent ? `ขาดเรียนวันตรวจ ${absent} คน` : '', 'absent', 'ดูคนที่ยังไม่ได้ตรวจ →'),
         tile('ความเสี่ยง', `${lv.vhigh} · ${lv.high} · ${lv.low}`, 'สูงมาก · สูง · ต่ำ'),
-        tile('ต้องส่งต่อหรือรักษาโพรงประสาท', `${ref} คน`),
-        tile('ขาดบริการตามแผน', `${miss} คน`, `ถึงกำหนดเดือนนี้ ${due} คน`)),
+        tileLink('ต้องส่งต่อหรือรักษาโพรงประสาท', `${ref} คน`, '', 'refneed'),
+        tileLink('ขาดบริการตามแผน', `${miss} คน`, 'เลยกำหนดแล้วยังไม่ได้รับ', 'miss'),
+        tileLink('ถึงกำหนดเดือนนี้', `${due} คน`, '', 'due')),
       el('div', { class: 'row' },
         el('button', { class: 'btn btn--primary', type: 'button', 'data-go': 'enrol', text: '+ ลงทะเบียนนักเรียน' }),
         el('button', { class: 'btn', type: 'button', 'data-go': 'kids', text: 'รายชื่อนักเรียน' }))),
@@ -480,10 +596,8 @@ function renderHome() {
     el('section', {},
       el('h3', { text: 'อยู่ใน v1.0 และรุ่นถัดไป' }),
       el('ul', { class: 'olist' },
-        el('li', { text: 'v1.0 (ตอนนี้): ลงทะเบียน ผลตรวจครั้งแรกตามแบบฟอร์ม final แผนการดูแลรายเดือน ติ๊กแผนเพื่อบันทึกบริการ ดาวน์โหลด CSV' }),
-        el('li', { text: 'v1.1: บันทึกบริการนอกแผน กิจกรรมกลุ่ม การส่งต่อ และรอบส่งเบิก' }),
-        el('li', { text: 'v1.2: หน้าเงินของหน่วยตามอัตราค่าบริการของแต่ละรูปแบบ' }),
-        el('li', { text: 'v1.3: ตรวจรอบ 6 และ 12 เดือน และตัวชี้วัด quality gate' }))));
+        el('li', { text: 'ตอนนี้ (v1.0): ลงทะเบียน ผลตรวจครั้งแรก แผนการดูแลรายเดือน บันทึกบริการนอกแผน กิจกรรมกลุ่ม ส่งเบิกรายเดือน ดาวน์โหลด CSV' }),
+        el('li', { text: 'รุ่นถัดไป: แนบไฟล์หลักฐาน หน้าเงินตามอัตราค่าบริการ (v1.2) ตรวจรอบ 6 และ 12 เดือน (v1.3)' }))));
 }
 
 /* ================================================================ STUDENTS: cards */
@@ -502,7 +616,7 @@ function fpmMap(u, k) {
 }
 function statusChip(k) {
   if (examined(k)) return el('span', { class: 'chip ' + LEVEL[lvlOf(k)].chip, text: LEVEL[lvlOf(k)].th });
-  return el('span', { class: 'chip chip--crit', text: k.status === 'absent' ? 'ขาดเรียนวันตรวจ' : 'ยังไม่ได้ตรวจ' });
+  return el('span', { class: 'chip chip--due', text: k.status === 'absent' ? 'ขาดเรียนวันตรวจ' : 'ยังไม่ได้ตรวจ' });   // red stays for no consent (R1-19)
 }
 function kidCard(u, k, st) {
   const prog = st.total ? st.done / st.total * 100 : 0;
@@ -528,16 +642,16 @@ function renderKids() {
   const all = u.kids.map(k => ({ k, st: kidState(u, k) }));
   const counts = { miss: 0, due: 0, ref: 0, absent: 0, ok: 0 };
   all.forEach(x => { const f = stFlags(x.st); for (const key in counts) if (f[key]) counts[key]++; });
-  $('#kidsSub').textContent = `${u.schools.map(s => s.name).join(', ')} · ${u.kids.length} คน · ข้อมูล ณ ${thDate(TODAY)}`;
+  $('#kidsSub').textContent = `${u.schools.map(s => s.name).join(', ')} · ${u.kids.length} คน · ${loadedText()}`;
   $('#qchips').replaceChildren(...[['all', 'ทั้งหมด', u.kids.length], ['miss', 'ขาดบริการ', counts.miss], ['due', 'ถึงกำหนดเดือนนี้', counts.due], ['ref', 'ส่งต่อรอผล', counts.ref], ['absent', 'ยังไม่ได้ตรวจ', counts.absent], ['ok', 'ครบตามแผน', counts.ok]].map(([v, lab, n]) =>
     el('button', { type: 'button', 'aria-pressed': String(S.kf.st === v), onclick: () => { S.kf.st = v; renderKids(); } }, lab, el('b', { text: String(n) }))));
   const classes = unitClasses(u);
   $('#kfCls').replaceChildren(el('option', { value: 'all', text: 'ทุกห้อง' }), ...classes.map(c => el('option', { value: c, text: c })));
   $('#kfQ').value = S.kf.q; $('#kfCls').value = S.kf.cls; $('#kfRisk').value = S.kf.risk; $('#kfSt').value = S.kf.st; $('#kfMiss').value = S.kf.miss; $('#kfGroup').value = S.kf.group;
-  const q = S.kf.q.trim();
+  const q = S.kf.q.trim().toUpperCase();   // IDs are upper case; tablet keyboards type lower case (R1-19)
   const rows = all.filter(({ k, st }) => {
-    const f = stFlags(st);
-    if (q && !k.id.includes(q) && !k.name.includes(q)) return false;
+    const f = { ...stFlags(st), refneed: needsReferral(k) };
+    if (q && !k.id.toUpperCase().includes(q)) return false;
     if (S.kf.cls !== 'all' && k.cls !== S.kf.cls) return false;
     if (S.kf.risk !== 'all' && (st.absent || lvlOf(k) !== S.kf.risk)) return false;
     if (S.kf.st !== 'all' && !f[S.kf.st]) return false;
@@ -574,37 +688,56 @@ function fillClasses(u, schoolId, keep) {
   $('#enClass').replaceChildren(...(s ? s.classes : []).map(c => el('option', { value: c, text: c })));
   if (keep && s && s.classes.includes(keep)) $('#enClass').value = keep;
 }
-function renderEnrol() {
-  const u = unit();
-  const k = S.editId ? u.byId[S.editId] : null;
-  $('#enTitle').textContent = k ? `แก้ไขข้อมูลลงทะเบียน · ${k.id}` : 'ลงทะเบียนนักเรียน';
-  $('#enSave').textContent = k ? 'บันทึกการแก้ไข' : 'บันทึกการลงทะเบียน';
-  $('#enMsg').replaceChildren();
-  $('#enSchool').replaceChildren(...u.schools.map(s => el('option', { value: s.id, text: s.name })));
-  const c = k ? k.c : {};
-  $('#enSchool').value = c.school_id || (u.schools[0] && u.schools[0].id) || '';
-  $('#enSchool').disabled = !!k;
-  fillClasses(u, $('#enSchool').value, c.class);
+// The last school and class used for a new child, per unit, so a class is enrolled in one go (R1-08).
+const lastClass = u => { try { return JSON.parse(lsGet('dent2-class-' + u.id) || 'null') || {}; } catch (e) { return {}; } };
+// Clears everything about the child; school and class stay. Consent and assent are never carried over (R1-08).
+function clearChildFields(c = {}) {
   $('#enSex').value = c.sex || '';
   $('#enBym').value = c.birth_ym || '';
   $('#enUc').checked = !!c.uc_verified; $('#enUcDate').value = c.uc_checked_on || ''; $('#enUcMethod').value = c.uc_method || '';
   $('#enConsent').value = c.consent_on || ''; $('#enAssent').checked = !!c.assent;
   $('#enCond').value = c.conditions || ''; $('#enAgSilver').checked = !!c.allergy_silver; $('#enAgColo').checked = !!c.allergy_colophony;
+  beAll($('#enForm'));
+}
+function renderEnrol() {
+  const u = unit();
+  const k = S.editId ? u.byId[S.editId] : null;
+  $('#enTitle').textContent = k ? `แก้ไขข้อมูลลงทะเบียน · ${k.id}` : 'ลงทะเบียนนักเรียน';
+  $('#enSave').textContent = k ? 'บันทึกการแก้ไข' : 'บันทึกการลงทะเบียน';
+  setIf('#enSaveNext', 'hidden', !!k);
+  $('#enMsg').replaceChildren();
+  $('#enDone')?.replaceChildren();
+  S.enBatch = [];
+  $('#enSchool').replaceChildren(...u.schools.map(s => el('option', { value: s.id, text: s.name })));
+  const c = k ? k.c : {}, last = k ? {} : lastClass(u);
+  const school = c.school_id || (u.schools.some(s => s.id === last.s) ? last.s : (u.schools[0] && u.schools[0].id)) || '';
+  $('#enSchool').value = school;
+  $('#enSchool').disabled = !!k;
+  fillClasses(u, $('#enSchool').value, k ? c.class : last.c);
   $('#enBym').max = toInput(TODAY).slice(0, 7);
   for (const id of ['#enUcDate', '#enConsent']) $(id).max = toInput(TODAY);
+  clearChildFields(c);
 }
 $('#enSchool').addEventListener('change', e => fillClasses(unit(), e.target.value));
+let enNext = false;   // which submit button was used (also for browsers without SubmitEvent.submitter)
+$('#enSaveNext')?.addEventListener('click', () => { enNext = true; });
+$('#enSave').addEventListener('click', () => { enNext = false; });
 $('#enForm').addEventListener('submit', async e => {
   e.preventDefault();
   const u = unit(), k = S.editId ? u.byId[S.editId] : null;
+  const next = !k && (e.submitter ? e.submitter.id === 'enSaveNext' : enNext);
+  enNext = false;
   const msg = $('#enMsg'); msg.replaceChildren();
   const bad = t => msg.replaceChildren(el('div', { class: 'err', text: t }));
   if (!$('#enClass').value) return bad('เลือกห้องเรียน');
   if (!$('#enSex').value) return bad('เลือกเพศ');
-  const bym = $('#enBym').value;
+  const bym = $('#enBym').value.trim();
+  // type="month" is a plain text box in Firefox and desktop Safari, so check the text (R1-18).
+  if (bym && +bym.slice(0, 4) > 2400) return bad('เดือนปีเกิด: ช่องนี้ใช้ปี ค.ศ. (พ.ศ. ลบ 543) เช่น 2019-05');
+  if (bym && !/^\d{4}-(0[1-9]|1[0-2])$/.test(bym)) return bad('เดือนปีเกิด: ใส่ปี ค.ศ.-เดือน เช่น 2019-05');
   if (bym && bym > toInput(TODAY).slice(0, 7)) return bad('เดือนปีเกิดอยู่ในอนาคต');
   for (const [id, lab] of [['#enUcDate', 'วันที่ตรวจสิทธิ'], ['#enConsent', 'วันที่ลงนามยินยอม']]) {
-    const d = fromInput($(id).value); if (d && d > TODAY) return bad(`${lab}อยู่ในอนาคต`);
+    const p = dateProblem($(id).value, lab); if (p) return bad(p);
   }
   const child = {
     school_id: $('#enSchool').value, class: $('#enClass').value, sex: $('#enSex').value, birth_ym: bym || null,
@@ -612,7 +745,7 @@ $('#enForm').addEventListener('submit', async e => {
     uc_checked_on: $('#enUcDate').value || null, uc_method: $('#enUcMethod').value || null, conditions: $('#enCond').value.trim() || null,
     allergy_silver: $('#enAgSilver').checked, allergy_colophony: $('#enAgColo').checked,
   };
-  $('#enSave').disabled = true;
+  $('#enSave').disabled = true; setIf('#enSaveNext', 'disabled', true);
   try {
     let id;
     if (k) {
@@ -631,11 +764,26 @@ $('#enForm').addEventListener('submit', async e => {
       const nk = kidFrom(c, null);
       u.kids.push(nk); u.byId[id] = nk; sortKids(u);
       S.newId = id;
+      lsSet('dent2-class-' + u.id, JSON.stringify({ s: child.school_id, c: child.class }));
+      S.enBatch.push(id);
     }
-    S.editId = null; S.kid = id; S.ftab = 'exam';
-    show('file');
+    if (next) {
+      // Stay on the form for the next child of the same class (R1-08).
+      S.newId = null;
+      clearChildFields();
+      // The banner sits above the form so a phone shows it with the next child's first field (R2-03).
+      const done = $('#enDone') || msg;
+      done.replaceChildren(el('div', { class: 'ok' }, el('b', { text: `ลงทะเบียนแล้ว ${id}` }), ' · เขียนรหัสนี้ข้างชื่อเด็กในรายชื่อของหน่วย',
+        el('div', { class: 'tiny', style: 'margin-top:4px', text: `รหัสที่ออกรอบนี้ (${S.enBatch.length} คน): ${S.enBatch.join(', ')}` })));
+      toast(`ลงทะเบียนแล้ว ${id} · ${child.class}`);
+      done.scrollIntoView({ block: 'start' });
+      $('#enSex').focus({ preventScroll: true });
+    } else {
+      S.editId = null; S.kid = id; S.ftab = 'exam';
+      show('file');
+    }
   } catch (err) { bad('บันทึกไม่สำเร็จ · ' + errText(err)); }
-  $('#enSave').disabled = false;
+  $('#enSave').disabled = false; setIf('#enSaveNext', 'disabled', false);
 });
 
 /* ================================================================ CHILD FILE */
@@ -647,34 +795,44 @@ function ageText(k, d) {
 }
 function renderFile() {
   const u = unit();
+  const ks = $('#kidSel');
   if (!u.kids.length) {
+    ks.replaceChildren();
     $('#fileHead').replaceChildren(el('p', { class: 'hint', text: 'ยังไม่มีนักเรียน ลงทะเบียนก่อนที่หน้า "นักเรียน"' }));
     for (const ft of ['exam', 'plan', 'tx']) $('#fp-' + ft).hidden = true;
+    setIf('#fileTabs', 'hidden', true);
     return;
   }
-  if (!S.kid || !u.byId[S.kid]) S.kid = u.kids[0].id;
-  const ks = $('#kidSel');
-  ks.replaceChildren(...u.kids.map(k => el('option', { value: k.id, text: `${k.id} · ${kidLabel(k)}${examined(k) ? '' : ' · ยังไม่ได้ตรวจ'}` })));
-  ks.value = S.kid;
+  if (S.kid && !u.byId[S.kid]) S.kid = null;
+  ks.replaceChildren(el('option', { value: '', text: '– เลือกนักเรียน –' }), ...u.kids.map(k => el('option', { value: k.id, text: `${k.id} · ${kidLabel(k)}${examined(k) ? '' : ' · ยังไม่ได้ตรวจ'}` })));
+  ks.value = S.kid || '';
+  // No child is opened by default; the first child in the list is rarely the one in the chair (R1-19).
+  setIf('#fileTabs', 'hidden', !S.kid);
+  if (!S.kid) {
+    $('#fileHead').replaceChildren(el('p', { class: 'hint', text: 'เลือกนักเรียนจากช่อง "เปิดแฟ้ม" หรือหน้า "นักเรียน"' }));
+    for (const ft of ['exam', 'plan', 'tx']) $('#fp-' + ft).hidden = true;
+    hideSaveBar();
+    return;
+  }
   renderFileHead();
   for (const ft of ['exam', 'plan', 'tx']) { $('#fp-' + ft).hidden = S.ftab !== ft; $('#ft-' + ft).setAttribute('aria-selected', String(S.ftab === ft)); }
   if (S.ftab === 'exam') renderExam(); else if (S.ftab === 'plan') renderPlanGrid(); else renderKidTx();
   syncSaveBar();
 }
-$('#kidSel').addEventListener('change', e => { const id = e.target.value; e.target.value = S.kid; openKid(id); });
+$('#kidSel').addEventListener('change', e => { const id = e.target.value; e.target.value = S.kid || ''; if (id) openKid(id); });
 function renderFileHead() {
   const u = unit(), k = curKid(), st = kidState(u, k);
-  const kv = (label, value) => el('div', { class: 'kv' }, el('span', { text: label }), el('b', {}, value));
+  const kv = (label, value, cls) => el('div', { class: 'kv' + (cls ? ' ' + cls : '') }, el('span', { text: label }), el('b', {}, value));
   const school = u.schools.find(s => s.id === k.c.school_id);
   const fresh = S.newId === k.id;
   S.newId = null;
-  $('#fileHead').replaceChildren(
+  fill($('#fileHead'),
     fresh ? el('div', { class: 'ok' }, el('b', { text: `ลงทะเบียนแล้ว รหัสนักเรียน ${k.id}` }), ' · เขียนรหัสนี้ไว้ข้างชื่อเด็กในรายชื่อของหน่วย ระบบไม่เก็บชื่อเด็ก') : null,
     el('div', { class: 'childbar' },
       kv('รหัสนักเรียน', el('span', { class: 'mono big-id', text: k.id })), kv('ชั้น', `${k.cls} · ${school ? school.name : ''}`), kv('เพศ', sexTh(k) || '–'),
       kv(examined(k) ? 'อายุ ณ วันตรวจ' : 'อายุวันนี้', ageText(k, k.base || TODAY)),
       kv('ความเสี่ยง', examined(k) ? el('span', { class: 'chip ' + LEVEL[lvlOf(k)].chip, text: `${LEVEL[lvlOf(k)].th} (${riskScore(k)})` }) : statusChip(k)),
-      kv('ทำตามแผนถึงเดือนนี้', st.absent ? '–' : `${st.done}/${st.total} รายการ`)),
+      kv('ทำตามแผนถึงเดือนนี้', st.absent ? '–' : `${st.done}/${st.total} รายการ`, 'noprint')),
     !hasConsent(k) ? el('div', { class: 'alert', text: '⛔ ยังไม่มีความยินยอมของผู้ปกครองและเด็กครบ จึงบันทึกผลตรวจไม่ได้ กด "แก้ไขข้อมูลลงทะเบียน" เพื่อใส่วันที่ลงนามและติ๊กความยินยอมของเด็ก' }) : null,
     el('details', {}, el('summary', { text: 'ข้อมูลลงทะเบียน' }),
       el('div', { class: 'childbar', style: 'margin-top:10px' },
@@ -690,13 +848,15 @@ function renderFileHead() {
 function startExam(k) {
   const u = unit();
   k.editing = true; k.dirty = true;
-  k.teeth = typicalMouth(); k.risk = {}; k.pigi = emptyPigi(); k.urgent = { pain: false, swell: false, big: false }; k.needOv = {}; k.ovReason = {}; k.flOv = null;
-  k.examDate = new Date(TODAY); k.examiner = S.prov || u.examiners[0] || ''; k.place = 'van';
+  k.teeth = typicalMouth(); k.risk = {}; k.pigi = emptyPigi(); k.pigiSkip = false; k.showMiss = false; k.urgent = { pain: false, swell: false, big: false }; k.needOv = {}; k.ovReason = {}; k.flOv = null;
+  // The examiner is the chosen "ผู้บันทึก" or nobody: never the first code in the list (R1-02).
+  k.examDate = new Date(TODAY); k.examiner = u.examiners.includes(S.prov) ? S.prov : ''; k.place = 'van';
   S.sel = 16;
   renderFile();
 }
 async function markAbsent(k) {
   const u = unit();
+  if (!needProv()) return;
   const row = { study_id: k.id, unit_id: u.id, round: 'baseline', exam_date: toInput(TODAY), attended: false, examiner_code: S.prov || null };
   const res = k.exam ? await sb.from('exams').update(row).eq('id', k.exam.id).select().single() : await sb.from('exams').insert(row).select().single();
   if (res.error) return toastErr(res.error);
@@ -714,17 +874,21 @@ function renderExam() {
     if (!hasConsent(k)) { box.append(el('p', { class: 'hint', text: 'ยังไม่มีความยินยอมครบ บันทึกผลตรวจไม่ได้ แก้ไขข้อมูลลงทะเบียนก่อน' })); return; }
     box.append(el('section', {}, el('div', { class: 'card stack' },
       el('h3', { text: k.status === 'absent' ? `ขาดเรียนวันตรวจ (${thShort(k.examDate)})` : 'ยังไม่มีผลตรวจครั้งแรก' }),
-      el('p', { class: 'small muted', text: 'ผลตรวจครั้งแรกบันทึกในระบบโดยตรง (D-17) แผนการดูแลสร้างหลังกดบันทึกผลตรวจ' }),
+      el('p', { class: 'small muted', text: 'ผลตรวจครั้งแรกบันทึกในระบบโดยตรง แผนการดูแลสร้างหลังกดบันทึกผลตรวจ' }),
       el('div', { class: 'row' },
         el('button', { class: 'btn btn--primary', type: 'button', text: k.status === 'absent' ? 'บันทึกผลตรวจเก็บตก' : 'เริ่มบันทึกผลตรวจครั้งแรก', onclick: () => startExam(k) }),
         k.status === 'new' ? el('button', { class: 'btn', type: 'button', text: 'นักเรียนขาดเรียนวันตรวจ', onclick: () => markAbsent(k) }) : null))));
     return;
   }
-  if (k.editing) box.append(el('p', { class: 'note', text: 'ผลตรวจใหม่ ตั้งต้นจาก "ช่องปากเด็ก 7 ปีปกติ" แก้เฉพาะซี่ที่ต่าง ตอบแบบประเมินความเสี่ยงให้ครบ 8 ข้อ แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง' }));
+  if (k.editing) box.append(el('p', { class: 'note', text: 'ผลตรวจใหม่ ตั้งต้นจาก "ช่องปากเด็ก 7 ปีปกติ" แก้เฉพาะซี่ที่ต่าง ตอบแบบประเมินความเสี่ยงให้ครบ 8 ข้อ กรอก PI/GI ให้ครบ (หรือติ๊กว่าไม่ได้ตรวจ) แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง' }));
   const answered = riskAnswered(k), score = riskScore(k), lvl = riskLevel(score);
   $('#vDate').value = k.examDate ? toInput(k.examDate) : ''; $('#vDate').max = toInput(TODAY);
-  $('#vExam').replaceChildren(el('option', { value: '', text: '– เลือก –' }), ...u.examiners.map(c => el('option', { value: c, text: c })));
+  beHint($('#vDate'));
+  $('#vExam').replaceChildren(el('option', { value: '', text: '– เลือกรหัสผู้ตรวจ –' }), ...u.examiners.map(c => el('option', { value: c, text: c })));
   $('#vExam').value = k.examiner || '';
+  // After a failed save every missing item stays marked until it is filled (R1-04).
+  $('#vExam').classList.toggle('is-missing', k.showMiss && !k.examiner);
+  $('#vDate').classList.toggle('is-missing', k.showMiss && !!examDateProblem(k));
   $('#vPlace').value = k.place || 'van';
   for (const b of $$('#urgent input')) b.checked = !!k.urgent[b.dataset.u];
   const urg = Object.values(k.urgent).some(Boolean);
@@ -736,8 +900,8 @@ function renderExam() {
   for (const q of RISK) {
     if (q.sec) { body.append(el('tr', { class: 'sec' }, el('th', { colspan: '2', scope: 'colgroup', text: q.sec }))); continue; }
     const seg = el('div', { class: 'seg', role: 'group', 'aria-label': q.q });
-    for (const [v, lab, sc] of [['y', 'ใช่', q.y], ['n', 'ไม่ใช่', q.n]]) seg.append(el('button', { type: 'button', 'aria-pressed': String(k.risk[q.id] === v), text: `${lab} = ${sc}`, onclick: () => { k.risk[q.id] = v; afterExamChange(); } }));
-    body.append(el('tr', {}, el('td', { text: q.q }), el('td', { class: 'num' }, seg)));
+    for (const [v, lab, sc] of [['y', 'ใช่', q.y], ['n', 'ไม่ใช่', q.n]]) seg.append(el('button', { type: 'button', 'data-v': v, 'aria-pressed': String(k.risk[q.id] === v), text: `${lab} = ${sc}`, onclick: () => { k.risk[q.id] = v; afterExamChange(); refocus('#riskBody .seg', q.q, `button[data-v="${v}"]`); } }));
+    body.append(el('tr', { class: k.showMiss && !k.risk[q.id] ? 'is-missing' : null }, el('td', { text: q.q }), el('td', { class: 'num' }, seg)));
   }
   $('#riskTotal').textContent = answered === 8 ? score : `– (ตอบ ${answered}/8)`;
   $('#riskChip').replaceChildren(answered === 8 ? el('span', { class: 'chip ' + LEVEL[lvl].chip, text: `${score} คะแนน · ${LEVEL[lvl].th}` }) : el('span', { class: 'chip chip--warn', text: `ตอบแล้ว ${answered}/8 ข้อ` }));
@@ -749,6 +913,12 @@ function renderExam() {
   renderEditor();
   renderPigi(k);
   renderSummary(k, lvl, score, urg, refTeeth, answered);
+}
+// After a re-render, put focus back on the same control (matched by aria-label) so Tab keeps working (R2-06).
+function refocus(sel, label, inner) {
+  const box = $$(sel).find(x => x.getAttribute('aria-label') === label);
+  const target = box && inner ? box.querySelector(inner) : box;
+  if (target) target.focus({ preventScroll: true });
 }
 function afterExamChange() { const k = curKid(); k.dirty = true; renderFileHead(); renderExam(); syncSaveBar(); }
 $('#vDate').addEventListener('change', e => { const k = curKid(); k.examDate = fromInput(e.target.value); afterExamChange(); });
@@ -797,8 +967,14 @@ function renderEditor() {
   if (PRIM[pos]) types.push(['d', `ฟันน้ำนม ${PRIM[pos]}`]);
   types.push(['p', `ฟันแท้ ${pos}`], ['n', 'ไม่มีฟัน / ยังไม่ขึ้น']);
   for (const [v, lab] of types) typeSeg.append(el('button', { type: 'button', 'aria-pressed': String(t.t === v), text: lab, onclick: () => setPresence(k, pos, v) }));
+  // Step through the chart without scrolling back up, in chart order 16→26 then 46→36 (R1-06).
+  const step = d => { const i = POS.indexOf(S.sel); S.sel = POS[(i + d + POS.length) % POS.length]; renderExam(); };
   const head = el('div', { class: 'stack' },
-    el('h4', { text: `ตำแหน่ง ${pos}${FPM.includes(pos) ? ' · ฟันกรามแท้ซี่ที่หนึ่ง' : ''}` }),
+    el('div', { class: 'row between', style: 'gap:8px' },
+      el('h4', { text: `ตำแหน่ง ${pos}${FPM.includes(pos) ? ' · ฟันกรามแท้ซี่ที่หนึ่ง' : ''}` }),
+      el('span', { class: 'row', style: 'gap:6px' },
+        el('button', { class: 'btn btn--ghost', type: 'button', id: 'toothPrev', text: '← ซี่ก่อนหน้า', onclick: () => step(-1) }),
+        el('button', { class: 'btn btn--ghost', type: 'button', id: 'toothNext', text: 'ซี่ถัดไป →', onclick: () => step(1) }))),
     el('span', { class: 'small muted', text: 'ซี่ที่พบ (เท่ากับการวงกลมเลขซี่ในแบบกระดาษ)' }), typeSeg);
   if (t.t === 'n') {
     head.append(el('span', { class: 'small muted', text: 'เหตุผล' }), codeButtons([99, 97, 98, 96], t.A, v => set({ A: v }), CODE_N), el('p', { class: 'codedesc', text: CODE_N[t.A] }));
@@ -807,7 +983,7 @@ function renderEditor() {
   }
   head.append(el('span', { class: 'small muted', text: 'ผุหรือไม่' }),
     el('span', {}, t.B >= 3 ? el('span', { class: 'chip chip--crit', text: `ผุ (ICDAS ${t.B})` }) : el('span', { class: 'chip chip--ok', text: `ไม่ผุ (ICDAS ${t.B})` })),
-    el('p', { class: 'codedesc', text: t.t === 'd' ? 'ฟันน้ำนม: ใช้คำนวณ dmft และตัวชี้วัดฟันน้ำนมสูญเสียก่อนกำหนด (G4) การรักษาฟันน้ำนมไม่นับในงบโครงการ (D-54)' : 'ฟันแท้: ใช้คำนวณ DMFT และฟันผุใหม่ในฟันกรามแท้ (G3)' }));
+    el('p', { class: 'codedesc', text: t.t === 'd' ? 'ฟันน้ำนม: ใช้คำนวณ dmft และตัวชี้วัดฟันน้ำนมสูญเสียก่อนกำหนด การรักษาฟันน้ำนมไม่นับในงบโครงการ' : 'ฟันแท้: ใช้คำนวณ DMFT และฟันผุใหม่ในฟันกรามแท้' }));
   const colA = el('div', { class: 'stack' },
     el('span', { class: 'small muted', text: 'Code A · การอุด / เคลือบหลุมร่องฟัน' }),
     codeButtons([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], t.A, v => set({ A: v }), CODE_A),
@@ -838,18 +1014,31 @@ function renderEditor() {
   }
   box.append(el('div', { class: 'editor' }, head, colA, colN));
 }
-$('#presetBtn').addEventListener('click', () => { const k = curKid(); k.teeth = typicalMouth(); k.needOv = {}; k.ovReason = {}; afterExamChange(); });
+// One tap must not wipe a finished chart (R1-06).
+$('#presetBtn').addEventListener('click', () => {
+  const k = curKid();
+  if ((JSON.stringify(k.teeth) !== JSON.stringify(typicalMouth()) || Object.keys(k.needOv).length) && !confirm('ล้างแผนภูมิฟันทั้ง 24 ซี่กลับเป็นค่าเริ่มต้นหรือไม่ สิ่งที่แก้ไว้ในแผนภูมิจะหายไป')) return;
+  k.teeth = typicalMouth(); k.needOv = {}; k.ovReason = {}; afterExamChange();
+});
 $$('#urgent input').forEach(b => b.addEventListener('change', () => { curKid().urgent[b.dataset.u] = b.checked; afterExamChange(); }));
+// PI/GI: all 12 boxes filled, or "ไม่ได้ตรวจ PI/GI ครั้งนี้" ticked (then saved as {}) (R1-14).
 function renderPigi(k) {
   const tb = $('#pigiBody'); tb.replaceChildren();
+  setIf('#pigiSkip', 'checked', !!k.pigiSkip);
   for (const [idx, lab] of [['pi', 'PI คราบจุลินทรีย์'], ['gi', 'GI เหงือกอักเสบ']]) {
     const tr = el('tr', {}, el('th', { scope: 'row', text: lab }));
-    for (const t of PIGI_TEETH) tr.append(el('td', { class: 'num' }, el('select', { 'aria-label': `${idx.toUpperCase()} ${t}`, onchange: e => { k.pigi[t][idx] = +e.target.value; k.dirty = true; renderPigi(k); syncSaveBar(); } }, ...[0, 1, 2, 3].map(v => el('option', { value: String(v), text: String(v), selected: k.pigi[t][idx] === v })))));
-    const mean = PIGI_TEETH.reduce((s, t) => s + k.pigi[t][idx], 0) / PIGI_TEETH.length;
-    tr.append(el('td', { class: 'num', text: mean.toFixed(2) }));
+    for (const t of PIGI_TEETH) {
+      const cur = k.pigi[t][idx];
+      tr.append(el('td', { class: 'num' }, el('select', {
+        'aria-label': `${idx.toUpperCase()} ${t}`, disabled: k.pigiSkip ? true : null, class: k.showMiss && !k.pigiSkip && cur == null ? 'is-missing' : null,
+        onchange: e => { const lab = e.target.getAttribute('aria-label'); k.pigi[t][idx] = e.target.value === '' ? null : +e.target.value; k.dirty = true; renderExam(); syncSaveBar(); refocus('#pigiBody select', lab); },
+      }, el('option', { value: '', text: '–', selected: cur == null }), ...[0, 1, 2, 3].map(v => el('option', { value: String(v), text: String(v), selected: cur === v })))));
+    }
+    tr.append(el('td', { class: 'num', text: k.pigiSkip ? 'ไม่ได้ตรวจ' : pigiMean(k, idx) }));
     tb.append(tr);
   }
 }
+$('#pigiSkip')?.addEventListener('change', e => { const k = curKid(); if (!k) return; k.pigiSkip = e.target.checked; afterExamChange(); });
 function indices(k) {
   let d = 0, m = 0, f = 0, D = 0, M = 0, F = 0;
   for (const p of POS) {
@@ -867,20 +1056,36 @@ function renderSummary(k, lvl, score, urg, refTeeth, answered) {
   const fpmUp = FPM.filter(p => k.teeth[p].t === 'p').length;
   const part = FPM.filter(p => k.teeth[p].t === 'p' && k.teeth[p].partial).length;
   const fpmSeal = FPM.filter(p => k.teeth[p].t === 'p' && needOf(p, k) === 2).length;
-  const mean = idx => (PIGI_TEETH.reduce((s, t) => s + k.pigi[t][idx], 0) / PIGI_TEETH.length).toFixed(2);
+  const nPigi = pigiFilled(k);
+  const pigiText = k.pigiSkip ? 'ไม่ได้ตรวจ' : nPigi ? `${pigiMean(k, 'pi')} · ${pigiMean(k, 'gi')}${nPigi < 12 ? ` (กรอก ${nPigi}/12)` : ''}` : 'ยังไม่ได้กรอก';
   const d0 = k.examDate || TODAY;
   $('#summary').replaceChildren(
     kv('ระดับความเสี่ยง', answered === 8 ? `${LEVEL[lvl].th} (${score})` : `ยังตอบไม่ครบ (${answered}/8)`), kv('dmft (ฟันน้ำนม)', String(ix.dmft)), kv('DMFT (ฟันแท้)', String(ix.DMFT)),
     kv('ฟันแท้ที่ขึ้นแล้ว', `${perm.length} ซี่ (ฟันกรามแท้ ${fpmUp}${part ? ` · ไม่เต็มซี่ ${part}` : ''} · ฟันหน้า ${perm.length - fpmUp})`),
     kv('ฟันผุ (ICDAS ≥3)', `ฟันแท้ ${ix.D} · ฟันน้ำนม ${ix.d} ซี่`), kv('ฟันกรามแท้ที่ต้องเคลือบ', `${fpmSeal} ซี่`),
-    kv('PI · GI เฉลี่ย', `${mean('pi')} · ${mean('gi')}`), kv('นัดตรวจซ้ำ', answered === 8 ? thDate(addMonths(d0, LEVEL[lvl].recall)) : '–'),
+    kv('PI · GI เฉลี่ย', pigiText), kv('นัดตรวจซ้ำ', answered === 8 ? thDate(addMonths(d0, LEVEL[lvl].recall)) : '–'),
     kv('ต้องส่งต่อหรือไม่', urg || refTeeth.length ? `ใช่ · ${refTeeth.join(', ') || 'อาการเร่งด่วน'}` : 'ไม่'));
 }
 
 /* ---- save bar and saving */
+const examDateProblem = k => (!k.examDate ? 'ใส่วันที่ตรวจ' : dateProblem(toInput(k.examDate), 'วันที่ตรวจ'));
+// Everything that still blocks saving the exam, in screen order.
+function examProblems(k) {
+  const out = [], a = riskAnswered(k), n = pigiFilled(k), dp = examDateProblem(k);
+  if (dp) out.push(dp);
+  if (!k.examiner) out.push('ยังไม่ได้เลือกรหัสผู้ตรวจ');
+  if (a < 8) out.push(`แบบประเมินความเสี่ยงตอบแล้ว ${a}/8 ข้อ`);
+  if (!k.pigiSkip && n < 12) out.push(`PI/GI กรอกแล้ว ${n}/12 ช่อง (หรือติ๊ก "ไม่ได้ตรวจ PI/GI ครั้งนี้")`);
+  return out;
+}
+// The save bar always says what is left (R1-04).
 function syncSaveBar() {
   const k = S.tab === 'file' ? curKid() : null;
-  $('#saveBar').hidden = !(k && k.dirty);
+  const on = !!(k && k.dirty && k.risk && k.pigi);
+  $('#saveBar').hidden = !on;
+  if (!on) return;
+  const left = examProblems(k).length;
+  $('#saveMsg').textContent = `ยังไม่บันทึก · แบบประเมิน ${riskAnswered(k)}/8 ข้อ · PI/GI ${k.pigiSkip ? 'ไม่ได้ตรวจ' : pigiFilled(k) + '/12'} · ผู้ตรวจ ${k.examiner || 'ยังไม่เลือก'}${left ? '' : ' · ครบแล้ว กดบันทึกผลตรวจ'}`;
 }
 function hideSaveBar() { $('#saveBar').hidden = true; }
 $('#discardBtn').addEventListener('click', () => { const k = curKid(); if (!k) return; discardExam(k); toast('ยกเลิกการแก้ไขแล้ว'); renderFile(); });
@@ -888,11 +1093,17 @@ $('#saveExamBtn').addEventListener('click', saveExam);
 async function saveExam() {
   const u = unit(), k = curKid();
   if (!k || !k.dirty) return;
-  const answered = riskAnswered(k);
-  if (answered < 8) { toast(`แบบประเมินความเสี่ยงตอบแล้ว ${answered}/8 ข้อ ตอบให้ครบก่อนบันทึก`); return; }
-  if (!k.examDate || k.examDate > TODAY) { toast('ใส่วันที่ตรวจ (ไม่เกินวันนี้)'); return; }
-  if (!k.examiner) { toast('เลือกรหัสผู้ตรวจ'); return; }
   if (!hasConsent(k)) { toast('ยังไม่มีความยินยอมครบ บันทึกผลตรวจไม่ได้'); return; }
+  const probs = examProblems(k);
+  if (probs.length) {
+    // Mark every missing item and bring the first one into view (R1-04).
+    k.showMiss = true;
+    if (S.ftab !== 'exam') { S.ftab = 'exam'; renderFile(); } else renderExam();
+    toast('ยังบันทึกไม่ได้ · ' + probs.join(' · '), 6000);
+    const first = $('#examBody .is-missing');
+    if (first) { first.scrollIntoView({ block: 'center' }); if (first.tagName !== 'TR') first.focus({ preventScroll: true }); }
+    return;
+  }
   const teeth = {};
   for (const pos of POS) {
     const t = k.teeth[pos];
@@ -903,17 +1114,46 @@ async function saveExam() {
   }
   const ovReason = Object.fromEntries(Object.keys(k.needOv).map(p => [p, k.ovReason[p] || OV_REASONS[0]]));
   const row = { study_id: k.id, unit_id: u.id, round: 'baseline', exam_date: toInput(k.examDate), place: k.place, examiner_code: k.examiner, attended: true,
-    risk: k.risk, teeth, pigi: k.pigi, urgent: k.urgent, need_override: k.needOv, override_reason: ovReason, fl_override: k.flOv };
+    risk: k.risk, teeth, pigi: k.pigiSkip ? {} : k.pigi, urgent: k.urgent, need_override: k.needOv, override_reason: ovReason, fl_override: k.flOv };
   $('#saveExamBtn').disabled = true;
   const res = k.exam ? await sb.from('exams').update(row).eq('id', k.exam.id).select().single() : await sb.from('exams').insert(row).select().single();
   $('#saveExamBtn').disabled = false;
   if (res.error) { toastErr(res.error); return; }
   const first = !k.exam || !k.exam.attended;
+  const oldDate = k.exam && k.exam.attended ? k.exam.exam_date : null;
   applyExam(k, res.data);
   hideSaveBar();
-  toast(first ? `บันทึกผลตรวจแล้ว · ${k.id} · ดูแผนการดูแลได้เลย` : `บันทึกการแก้ไขผลตรวจแล้ว · ${k.id}`);
+  let note = '';
+  if (!first && oldDate && oldDate !== res.data.exam_date) note = await moveExamService(u, k, res.data.exam_date);
+  if (first && !(u.txByKid[k.id] || []).some(t => t.code === '174' || t.code === '173')) {
+    // The first exam is itself service 174, month 1, by the examiner on the exam date (team decision on R1-03).
+    let err = null;
+    const ok = await insertServices([{ unit_id: u.id, study_id: k.id, code: '174', tooth: null, service_date: toInput(k.examDate), plan_key: 'exam', plan_month: 1,
+      from_plan: true, provider: k.examiner, status: u.arm === 'cap' ? 'recorded' : 'draft' }], e => { err = e; });
+    note = ok ? ` · บันทึกบริการตรวจช่องปาก (174) เดือนที่ 1 ให้แล้ว${u.arm === 'cap' ? '' : ' (ร่าง ยังไม่ส่ง)'}`
+      : ` · แต่บันทึกบริการตรวจ (174) ไม่สำเร็จ (${errText(err)}) ติ๊กช่อง "ตรวจช่องปาก" เดือนที่ 1 ในแผนแทน`;
+  }
+  toast(first ? `บันทึกผลตรวจแล้ว · ${k.id}${note}` : `บันทึกการแก้ไขผลตรวจแล้ว · ${k.id}${note}`, note && /ไม่สำเร็จ|ส่งเบิกไปแล้ว/.test(note) ? 8000 : 4200);
   if (first) S.ftab = 'plan';
   renderFile();
+}
+
+// The month-1 exam service (plan_key 'exam', from the plan or recorded at the first save) follows a corrected exam date,
+// while it is still draft or recorded. A submitted one stays and the unit is told to inform the research team (R2-08).
+async function moveExamService(u, k, date) {
+  const mine = (u.txByKid[k.id] || []).filter(t => t.planKey === 'exam' && t.fromPlan && t.planMonth === 1 && (t.code === '174' || t.code === '173'));
+  if (!mine.length) return '';
+  const open = mine.filter(t => ['draft', 'recorded'].includes(t.status));
+  let moved = 0;
+  if (open.length) {
+    const { data, error } = await sb.from('services').update({ service_date: date }).in('id', open.map(t => t.id)).in('status', ['draft', 'recorded']).select();
+    if (error) return ` · แต่ย้ายวันที่บริการตรวจ (174) ไม่สำเร็จ (${errText(error)})`;
+    for (const r of data || []) { const t = u.tx.find(x => x.id === r.id); if (t) Object.assign(t, txFrom(r)); }
+    reindex(u);
+    moved = (data || []).length;
+  }
+  if (moved < mine.length) return ' · วันที่ตรวจเปลี่ยนแล้ว แต่บริการตรวจ (174) ส่งเบิกไปแล้ว แจ้งทีมวิจัย';
+  return ` · ย้ายวันที่บริการตรวจ (174) เป็น ${thShort(fromInput(date))} แล้ว`;
 }
 
 /* ---- care plan month grid */
@@ -923,25 +1163,35 @@ async function toggleCell(k, row, m, tx) {
   const u = unit();
   if (busy) return;
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนแล้วค่อยติ๊กแผน'); return; }
+  if (tx) {
+    if (!['draft', 'recorded'].includes(tx.status)) { toast(`รายการนี้${STATUS[tx.status].th}แล้ว ยกเลิกในแผนไม่ได้`); return; }
+    // A finger scrolling the grid can land on a done cell: ask before removing a recorded service (R1-05).
+    if (!confirm(`ยกเลิกบริการ "${rowName(row)}" วันที่ ${thShort(tx.date)} ใช่หรือไม่`)) return;
+  } else {
+    if (!canServe(k)) { toast('นักเรียนคนนี้ยังไม่มีความยินยอมครบหรือถอนตัวแล้ว บันทึกบริการไม่ได้'); return; }
+    if (!needProv()) return;
+  }
+  const cm = monthOf(k.base, TODAY);
+  // A late cell is recorded with today's real date; plan_month keeps the month it fulfils (R1-05).
+  if (!tx && m !== 'any' && m < cm && !confirm(`บันทึกบริการ "${rowName(row)}" ของเดือนที่ ${m} (เลยกำหนด) ว่าให้บริการวันนี้ ${thShort(TODAY)} ใช่หรือไม่\nถ้าให้บริการวันอื่น ให้บันทึกที่หน้า "${claimTab(u)}" ด้วยวันที่จริง`)) return;
   busy = true;
   try {
     if (tx) {
-      if (!['draft', 'recorded'].includes(tx.status)) { toast(`รายการนี้${STATUS[tx.status].th}แล้ว ยกเลิกในแผนไม่ได้`); return; }
-      const { error } = await sb.from('services').delete().eq('id', tx.id);
+      const { data, error } = await sb.from('services').delete().eq('id', tx.id).select('id');
       if (error) { toastErr(error); return; }
+      if (!data || !data.length) { toast('ยกเลิกไม่ได้ รายการนี้อาจถูกส่งเบิกจากอีกเครื่องแล้ว กด "โหลดข้อมูลใหม่"'); return; }
       u.tx = u.tx.filter(x => x !== tx); reindex(u);
       toast(`ยกเลิกแล้ว · ${rowName(row)}`);
     } else {
-      const cm = monthOf(k.base, TODAY);
-      const date = m === 'any' || m === cm ? new Date(TODAY) : new Date(Math.min(addMonths(k.base, m), TODAY));
+      const date = new Date(TODAY);
       const code = row.code === 'STUDY' ? '174' : row.code;
       const ins = { unit_id: u.id, study_id: k.id, code, tooth: row.tooth ?? null, service_date: toInput(date), plan_key: row.key, plan_month: m === 'any' ? null : m,
-        from_plan: true, provider: S.prov || null, status: u.arm === 'cap' ? 'recorded' : 'draft' };
+        from_plan: true, provider: S.prov, status: u.arm === 'cap' ? 'recorded' : 'draft' };
       const { data, error } = await sb.from('services').insert(ins).select().single();
       if (error) { toastErr(error); return; }
       u.tx.push(txFrom(data)); reindex(u);
       const v = refValue(u, code, row.tooth);
-      toast(`บันทึกแล้ว · ${rowName(row)} · ${thShort(date)}${v ? ` · มูลค่าอ้างอิง ${fmt2(v)} บาท` : ''}${S.prov ? '' : ' · ยังไม่ได้เลือกผู้บันทึกที่แถบด้านบน'}`);
+      toast(`บันทึกแล้ว · ${rowName(row)}${m !== 'any' && m < cm ? ` (ของเดือนที่ ${m})` : ''} · ${thShort(date)}${v ? ` · มูลค่าอ้างอิง ${fmt2(v)} บาท` : ''}`);
     }
   } finally { busy = false; }
   renderFileHead(); renderPlanGrid();
@@ -949,8 +1199,8 @@ async function toggleCell(k, row, m, tx) {
 function monthCell(k, row, m, cm, txs) {
   if (row.anytime) { const t = txs.find(x => monthOf(k.base, x.date) === m); return t ? el('span', { class: 'mdone', title: `ทำแล้ว ${thDate(t.date)}`, text: '✓' }) : ''; }
   const planned = row.months.includes(m);
-  const inM = txs.filter(x => monthOf(k.base, x.date) === m);
-  if (row.study) return planned ? el('span', { class: 'cellbtn is-study', title: `ตรวจรอบโครงการ ครั้งที่ ${m === 6 ? 2 : 3} (v1.3)`, 'aria-label': 'ตรวจรอบโครงการ' }) : el('span', { class: 'dash', 'aria-hidden': 'true', text: '–' });
+  const inM = txs.filter(x => txMonth(k, x) === m);
+  if (row.study) return planned ? el('span', { class: 'cellbtn is-study', title: `ตรวจรอบโครงการ ครั้งที่ ${m === 6 ? 2 : 3} (เปิดใช้ภายหลัง)`, 'aria-label': 'ตรวจรอบโครงการ' }) : el('span', { class: 'dash', 'aria-hidden': 'true', text: '–' });
   if (!planned) return inM.length ? el('span', { class: 'cellbtn is-extra', title: `ทำนอกแผน ${inM.map(x => thShort(x.date)).join(', ')}`, 'aria-label': `${rowName(row)} เดือนที่ ${m} ทำนอกแผน`, text: '●' }) : el('span', { class: 'dash', 'aria-hidden': 'true', text: '–' });
   const t = inM[0], late = !t && m < cm, future = m > cm;
   const cls = 'cellbtn' + (t ? ' is-done' : late ? ' is-late' : m === cm ? ' is-due' : '');
@@ -974,7 +1224,9 @@ function anyCell(k, row, txs) {
 }
 function renderPlanGrid() {
   const u = unit(), k = curKid();
-  const wrap = $('#planGrid'); wrap.replaceChildren();
+  const wrap = $('#planGrid');
+  const sameKid = wrap.dataset.kid === k.id, prevLeft = wrap.scrollLeft;
+  wrap.replaceChildren(); wrap.dataset.kid = k.id;
   $('#planTitle').textContent = `แผนการดูแล · ${k.id}${k.name ? ' · ' + k.name : ''}`;
   if (!examined(k)) {
     $('#planSub').textContent = '';
@@ -994,7 +1246,10 @@ function renderPlanGrid() {
   const table = el('table', { class: 'pgrid' });
   const h1 = el('tr', {}, el('th', { class: 'rowh', scope: 'col' }), el('th', { colspan: '12', scope: 'colgroup', class: 'grp-h', text: `เดือนที่ (นับจากตรวจครั้งแรก ${thShort(k.base)})` }), el('th', { class: 'anycol' }));
   const h2 = el('tr', {}, el('th', { class: 'rowh', scope: 'col', text: 'รายการ' }));
-  for (let m = 1; m <= 12; m++) h2.append(el('th', { scope: 'col', class: m === cm ? 'cur' : '' }, el('span', { class: 'mno', text: String(m) }), el('span', { class: 'mcal', text: thMon(addMonths(k.base, m)) })));
+  for (let m = 1; m <= 12; m++) {
+    const r = monthRange(k.base, m);   // the days that count as month m (R1-12)
+    h2.append(el('th', { scope: 'col', class: m === cm ? 'cur' : '', title: `เดือนที่ ${m}: ${thShort(r.from)} – ${r.to ? thShort(r.to) : 'เป็นต้นไป'}` }, el('span', { class: 'mno', text: String(m) }), el('span', { class: 'mcal', text: thMon(addMonths(k.base, m)) })));
+  }
   h2.append(el('th', { scope: 'col', class: 'anycol', text: 'ไม่ระบุเดือน' }));
   table.append(el('thead', {}, h1, h2));
   const tb = el('tbody');
@@ -1002,20 +1257,23 @@ function renderPlanGrid() {
   for (const row of rows) {
     const grp = row.prim ? 'prim' : row.tooth || row.key === 'tx-urg' ? 'perm' : 'mouth';
     if (grp !== lastGrp) {
-      const title = { mouth: 'ทั้งปาก / รายคน', perm: 'รายซี่ · ฟันแท้', prim: 'รายซี่ · ฟันน้ำนม (ไม่นับในงบโครงการ D-54)' }[grp];
+      const title = { mouth: 'ทั้งปาก / รายคน', perm: 'รายซี่ · ฟันแท้', prim: 'รายซี่ · ฟันน้ำนม (ไม่นับในงบโครงการ)' }[grp];
       tb.append(el('tr', { class: 'sec' }, el('th', { colspan: '14', scope: 'colgroup', text: title })));
       lastGrp = grp;
     }
     const txs = row.study ? [] : rowTx(u, k, row);
-    const tr = el('tr', {}, el('th', { scope: 'row', class: 'rowh' }, rowName(row), row.prim ? el('span', { class: 'chip chip--prim tiny', style: 'margin-left:6px', text: 'ฟันน้ำนม' }) : null, el('div', { class: 'tiny muted', text: row.sub })));
+    const tr = el('tr', { class: row.study ? 'is-study-row' : null }, el('th', { scope: 'row', class: 'rowh' }, rowName(row), row.prim ? el('span', { class: 'chip chip--prim tiny', style: 'margin-left:6px', text: 'ฟันน้ำนม' }) : null, el('div', { class: 'tiny muted', text: row.sub })));
     for (let m = 1; m <= 12; m++) tr.append(el('td', { class: m === cm ? 'cur' : '' }, monthCell(k, row, m, cm, txs)));
     tr.append(el('td', { class: 'anycol' }, anyCell(k, row, txs)));
     tb.append(tr);
   }
   table.append(tb);
   wrap.append(table);
+  // Same child: keep where the user scrolled. New child: open at the current month (R1-10).
+  if (sameKid) wrap.scrollLeft = prevLeft;
+  else { const c = table.querySelector('thead th.cur'), rh = table.querySelector('thead .rowh'); wrap.scrollLeft = c && cm > 4 ? Math.max(0, c.offsetLeft - (rh ? rh.offsetWidth : 210) - 3 * c.offsetWidth) : 0; }
   $('#planHint').textContent = (u.arm === 'cap' ? 'ติ๊กช่องในแผนเมื่อให้บริการ ระบบบันทึกเป็นผลงาน' : 'ติ๊กช่องในแผนเมื่อให้บริการ ระบบสร้างรายการบริการ (ร่าง) ให้')
-    + ' แตะซ้ำเพื่อยกเลิก วันที่บริการ = วันนี้ (หรือเดือนนั้นถ้าย้อนหลัง) ผู้บันทึกมาจากช่อง "ผู้บันทึก" ด้านบน บริการนอกแผนและกิจกรรมกลุ่มอยู่ใน v1.1';
+    + ` แตะช่องที่ทำแล้วเพื่อยกเลิก วันที่บริการ = วันนี้ (ช่องที่เลยกำหนดก็บันทึกวันนี้) ผู้บันทึกมาจากช่อง "ผู้บันทึก" ด้านบน บริการที่ให้วันอื่น บริการนอกแผน และกิจกรรมกลุ่ม บันทึกที่หน้า "${claimTab(u)}"`;
   renderPlanTotals(u, k, rows, cm);
   $('#homecare').textContent = lvl === 'low'
     ? 'แปรงฟันด้วยยาสีฟันผสมฟลูออไรด์ 1,000 ppm ขึ้นไป วันละ 2 ครั้ง · ผู้ปกครองแปรงซ้ำก่อนนอน · ลดขนมและเครื่องดื่มหวานนอกมื้อ'
@@ -1030,20 +1288,37 @@ function renderPlanTotals(u, k, rows, cm) {
     else { if (PRICE[row.code] && PRICE[row.code].unpriced) unpriced += reps; main += refValue(u, row.code, row.tooth) * reps; }
     const txs = rowTx(u, k, row);
     if (row.anytime) { dueN++; if (txs.length) done++; }
-    else for (const m of row.months) if (m <= cm) { dueN++; if (txs.some(t => monthOf(k.base, t.date) === m)) done++; }
+    else for (const m of row.months) if (m <= cm) { dueN++; if (txs.some(t => txMonth(k, t) === m)) done++; }
   }
   const t = (label, value, note) => el('div', { class: 'stack' }, el('span', { class: 'small muted', text: label }), el('span', { class: 'big', text: value }), note ? el('span', { class: 'tiny muted', text: note }) : null);
   $('#planTotals').replaceChildren(
-    t('มูลค่าแผนทั้งปี (ราคาอ้างอิง)', `${fmt(main)} บาท`, `ฟันแท้และบริการรายคน · ไม่รวมตรวจรอบโครงการ${unpriced ? ` · ยังไม่มีราคา ${unpriced} รายการ` : ''} · อัตราจ่ายจริงตาม fee schedule ใน v1.2`),
-    t('รายการฟันน้ำนม', `${primN} รายการ`, 'บันทึกได้ ไม่นับในงบโครงการ (D-54)'),
+    t('มูลค่าแผนทั้งปี (ราคาอ้างอิง)', `${fmt(main)} บาท`, `ฟันแท้และบริการรายคน · ไม่รวมตรวจรอบโครงการ${unpriced ? ` · ยังไม่มีราคา ${unpriced} รายการ` : ''} · ยอดจ่ายจริงคิดตามอัตราค่าบริการโดยทีมวิจัย`),
+    t('รายการฟันน้ำนม', `${primN} รายการ`, 'บันทึกได้ ไม่นับในงบโครงการ'),
     t('ทำแล้วตามกำหนด', `${done}/${dueN}`, `รายการที่ถึงกำหนดถึงเดือนที่ ${cm}`));
 }
 $('#printBtn').addEventListener('click', () => window.print());
 
 /* ---- child's services */
+// For a service about to be entered on the claims page: which plan row and month it fulfils.
+// Month of its date when that month is planned and still open; else the earliest open planned month before it
+// (a late cell closed with the real date); else the month of its date if planned (already done); else out of plan.
+function planFor(k, { code, tooth, date }) {
+  if (!k || !examined(k)) return null;
+  const u = unit(), m = monthOf(k.base, date);
+  for (const r of buildPlan(k)) {
+    if (r.study || !r.codes.includes(code) || (r.tooth != null && r.tooth !== tooth)) continue;
+    if (r.anytime) return { row: r, month: null, late: false };
+    const done = new Set(rowTx(u, k, r).map(t => txMonth(k, t)));
+    if (r.months.includes(m) && !done.has(m)) return { row: r, month: m, late: false };
+    const earlier = r.months.filter(x => x < m && !done.has(x));
+    if (earlier.length) return { row: r, month: earlier[0], late: true };
+    if (r.months.includes(m)) return { row: r, month: m, late: false };
+  }
+  return null;
+}
 function planMatch(k, tx) {
   if (!k || !examined(k)) return null;
-  const m = monthOf(k.base, tx.date);
+  const m = txMonth(k, tx);
   return buildPlan(k).find(r => !r.study && r.codes.includes(tx.code) && (r.tooth == null || r.tooth === tx.tooth) && (r.anytime || r.months.includes(m))) || null;
 }
 async function saveOutcome(tx) {
@@ -1057,7 +1332,7 @@ async function saveOutcome(tx) {
 }
 function renderKidTx() {
   const u = unit(), k = curKid();
-  $('#kidAddBtn').hidden = !examined(k);
+  $('#kidAddBtn').hidden = !examined(k) || !canServe(k);
   const tb = $('#kidTxBody'); tb.replaceChildren();
   const list = [...(u.txByKid[k.id] || [])].sort((a, b) => b.date - a.date || b.id - a.id);
   if (!list.length) { tb.append(el('tr', {}, el('td', { colspan: '8', class: 'muted', text: 'ยังไม่มีบริการที่บันทึก' }))); return; }
@@ -1065,9 +1340,9 @@ function renderKidTx() {
     const pm = planMatch(k, tx), v = refValue(u, tx.code, tx.tooth);
     tb.append(el('tr', {},
       el('td', { text: thShort(tx.date) }), el('td', { class: 'num', text: examined(k) ? String(monthOf(k.base, tx.date)) : '–' }),
-      el('td', { class: 'wrapcell' }, pname(tx.code), isPrimNo(tx.tooth) ? el('div', { class: 'tiny muted', text: 'ฟันน้ำนม นอกงบโครงการ (D-54)' }) : null),
+      el('td', { class: 'wrapcell' }, pname(tx.code), isPrimNo(tx.tooth) ? el('div', { class: 'tiny muted', text: 'ฟันน้ำนม ไม่นับในงบโครงการ' }) : null),
       el('td', { class: 'mono', text: tx.tooth ? String(tx.tooth) : '–' }),
-      el('td', {}, pm ? el('span', { class: 'chip chip--ok', text: 'ตามแผน' }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' })),
+      el('td', {}, pm ? el('span', { class: 'chip chip--ok', text: pm.anytime ? 'ตามแผน' : `ตามแผน ด.${txMonth(k, tx)}` }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' })),
       el('td', { class: 'num' + (v ? '' : ' amt-0'), text: fmt2(v) }),
       el('td', {}, statusEl(tx), tx.code === 'REF' ? el('div', { class: 'tiny' }, tx.outcome ? `ผล: ${tx.outcome}` : 'รอผลส่งต่อ ',
         canEdit(tx) ? el('button', { class: 'linkbtn', type: 'button', text: tx.outcome ? 'แก้ผล' : 'บันทึกผล', onclick: () => saveOutcome(tx) }) : null) : null),
@@ -1083,7 +1358,7 @@ function txFlags(u) {
   const bump = key => (seen[key] = (seen[key] || 0) + 1);
   for (const tx of [...u.tx].sort((a, b) => a.date - b.date || a.id - b.id)) {
     const notes = [];
-    if (isPrimNo(tx.tooth)) notes.push('ฟันน้ำนม ไม่นับในงบโครงการ (D-54)');
+    if (isPrimNo(tx.tooth)) notes.push('ฟันน้ำนม ไม่นับในงบโครงการ');
     if (PRICE[tx.code] && PRICE[tx.code].outside && !isPrimNo(tx.tooth)) notes.push('นอกงบโครงการ เบิกตามระบบปกติ');
     if (PRICE[tx.code] && PRICE[tx.code].unpriced) notes.push('ยังไม่มีราคา (นับจำนวนไว้)');
     if (tx.kid && tx.code === '170') {
@@ -1103,16 +1378,23 @@ const statusEl = tx => {
 const CODE_GROUPS = [['ตรวจ', ['174', '173']], ['ส่งเสริมและป้องกัน', ['170', '171', '172', '175', '176']], ['รักษา', ['55', '56', '57', 'SDF', '68', '178', '1']], ['ส่งต่อ', ['REF']]];
 const canEdit = tx => ['draft', 'recorded', 'returned'].includes(tx.status);
 const claimTab = u => (u.arm === 'cap' ? 'บันทึกบริการ' : 'บันทึกและเบิก');
-function setupClaimsForm() {
+// keep = rebuilt after a data reload: what the user already picked stays (R1-09).
+function setupClaimsForm(keep) {
   const u = unit();
-  const kids = u.kids.filter(examined);
-  $('#cKid').replaceChildren(...kids.map(k => el('option', { value: k.id, text: `${k.id} · ${kidLabel(k)}` })));
-  if (S.kid && kids.some(k => k.id === S.kid)) $('#cKid').value = S.kid;
-  $('#cCode').replaceChildren(...CODE_GROUPS.map(([lab, codes]) => el('optgroup', { label: lab }, ...codes.filter(c => PRICE[c]).map(c => el('option', { value: c, text: `${c === 'SDF' || c === 'REF' ? '' : c + ' · '}${pname(c)}` })))));
-  if (!$('#cCode').value) $('#cCode').value = '170';
-  for (const id of ['#cDate', '#gDate']) { $(id).value = toInput(TODAY); $(id).max = toInput(TODAY); }
-  $('#gRooms').replaceChildren(el('legend', { class: 'small muted', text: 'ห้อง' }), ...unitClasses(u).map(c => el('label', { class: 'chk' }, el('input', { type: 'checkbox', value: c, checked: true, onchange: renderGroupList }), ' ' + c)));
-  S.gsel = new Set();
+  const prev = keep ? { kid: $('#cKid').value, code: $('#cCode').value, cDate: $('#cDate').value, gDate: $('#gDate').value, rooms: $$('#gRooms input:checked').map(x => x.value) } : null;
+  // Individual services: examined children with complete consent, not withdrawn (team decision on R1-20).
+  const kids = u.kids.filter(k => examined(k) && canServe(k));
+  // No child is preselected unless one was opened from a file: a quick save must not land on the first ID (R2-04).
+  $('#cKid').replaceChildren(el('option', { value: '', text: '– เลือกนักเรียน –' }), ...kids.map(k => el('option', { value: k.id, text: `${k.id} · ${kidLabel(k)}` })));
+  const want = prev ? prev.kid : S.kid;
+  $('#cKid').value = want && kids.some(k => k.id === want) ? want : '';
+  // No service is preselected: a quick tap must not record an exam (R1-20).
+  $('#cCode').replaceChildren(el('option', { value: '', text: '– เลือกบริการ –' }), ...CODE_GROUPS.map(([lab, codes]) => el('optgroup', { label: lab }, ...codes.filter(c => PRICE[c]).map(c => el('option', { value: c, text: `${c === 'SDF' || c === 'REF' ? '' : c + ' · '}${pname(c)}` })))));
+  $('#cCode').value = prev && PRICE[prev.code] ? prev.code : '';
+  for (const id of ['#cDate', '#gDate']) { $(id).value = prev ? prev[id.slice(1)] : toInput(TODAY); $(id).max = toInput(TODAY); }
+  $('#gRooms').replaceChildren(el('legend', { class: 'small muted', text: 'ห้อง' }), ...unitClasses(u).map(c => el('label', { class: 'chk' }, el('input', { type: 'checkbox', value: c, checked: prev ? prev.rooms.includes(c) : true, onchange: renderGroupList }), ' ' + c)));
+  if (!prev) { S.gsel = new Set(); $('#gTopic').value = ''; $('#gTopic').placeholder = topicHint($('#gCode').value); }
+  beAll($('#claims'));
 }
 function toothOptions(k, code) {
   const kind = PRICE[code] && PRICE[code].tooth;
@@ -1132,30 +1414,34 @@ function toothOptions(k, code) {
 function claimPreview() {
   const u = unit(), k = u.byId[$('#cKid').value], code = $('#cCode').value;
   const pv = $('#cPreview'); pv.replaceChildren();
-  if (!k) { pv.append(el('span', { class: 'muted', text: 'ยังไม่มีนักเรียนที่บันทึกผลตรวจแล้ว บันทึกบริการรายคนได้หลังตรวจครั้งแรก' })); $('#cSave').disabled = true; return; }
+  const none = $('#cKid').options.length <= 1;
+  if (!k) { pv.append(el('span', { class: 'muted', text: none ? 'ยังไม่มีนักเรียนที่บันทึกผลตรวจแล้วและมีความยินยอมครบ บันทึกบริการรายคนได้หลังตรวจครั้งแรก' : 'เลือกนักเรียน' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; return; }
+  if (!code) { pv.append(el('span', { class: 'muted', text: 'เลือกบริการ' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; return; }
   const opts = toothOptions(k, code);
   const tSel = $('#cTooth');
   $('#cToothWrap').hidden = !opts;
   if (opts) { const prev = tSel.value; tSel.replaceChildren(...opts.map(([v, lab]) => el('option', { value: v, text: lab }))); if (opts.some(o => o[0] === prev)) tSel.value = prev; }
   const tooth = opts && tSel.value ? +tSel.value : null;
-  const d = fromInput($('#cDate').value);
+  const d = fromInput($('#cDate').value), dp = dateProblem($('#cDate').value, 'วันที่ให้บริการ');
   const line = (label, value) => el('div', { class: 'pl' }, el('span', { class: 'muted', text: label }), el('b', { text: value }));
-  if (!d || d > TODAY || d < k.base) { pv.append(el('div', { class: 'hint', text: `วันที่ต้องอยู่ระหว่างวันตรวจครั้งแรก (${thShort(k.base)}) ถึงวันนี้ (${thShort(TODAY)})` })); $('#cSave').disabled = true; return; }
-  if (opts && !opts.length) { pv.append(el('div', { class: 'hint', text: PRICE[code].tooth === 'fpm' ? 'นักเรียนคนนี้ยังไม่มีฟันกรามแท้ซี่ที่หนึ่งที่ขึ้นแล้ว เคลือบหลุมร่องฟันเฉพาะฟันกรามแท้ซี่ที่หนึ่ง (D-09)' : 'ไม่มีซี่ที่เข้าเงื่อนไขของบริการนี้ในผลตรวจ' })); $('#cSave').disabled = true; return; }
+  if (!d || dp || d < k.base) { pv.append(el('div', { class: 'hint', text: dp && dp.includes('ค.ศ.') ? dp : `วันที่ต้องอยู่ระหว่างวันตรวจครั้งแรก (${thShort(k.base)}) ถึงวันนี้ (${thShort(TODAY)})` })); $('#cSave').disabled = true; return; }
+  if (opts && !opts.length) { pv.append(el('div', { class: 'hint', text: PRICE[code].tooth === 'fpm' ? 'นักเรียนคนนี้ยังไม่มีฟันกรามแท้ซี่ที่หนึ่งที่ขึ้นแล้ว เคลือบหลุมร่องฟันเฉพาะฟันกรามแท้ซี่ที่หนึ่ง' : 'ไม่มีซี่ที่เข้าเงื่อนไขของบริการนี้ในผลตรวจ' })); $('#cSave').disabled = true; return; }
   if (code === 'SDF' && k.c.allergy_silver) { pv.append(el('div', { class: 'alert', text: '⛔ นักเรียนคนนี้แพ้เงิน ห้ามใช้ SDF' })); $('#cSave').disabled = true; return; }
   $('#cSave').disabled = false;
-  const pm = planMatch(k, { code, tooth, date: d });
+  const pf = planFor(k, { code, tooth, date: d });
   const v = refValue(u, code, tooth);
   pv.append(line('นักเรียน', `${k.id} · ${kidLabel(k)} · เดือนที่ ${monthOf(k.base, d)} หลังตรวจครั้งแรก`),
-    line('แผน', pm ? `ตรงกับแผน: ${rowName(pm)} · ติ๊กในแผนให้` : 'นอกแผน · บันทึกได้ ติดป้าย "นอกแผน"'),
+    line('แผน', !pf ? 'นอกแผน · บันทึกได้ ติดป้าย "นอกแผน"'
+      : pf.late ? `ตามแผน (เลยกำหนด) เดือนที่ ${pf.month}: ${rowName(pf.row)} · ติ๊กช่องเดือนที่ ${pf.month} ให้`
+        : `ตรงกับแผน: ${rowName(pf.row)}${pf.month ? ` เดือนที่ ${pf.month}` : ''} · ติ๊กในแผนให้`),
     line('มูลค่าอ้างอิง', v ? `${fmt2(v)} บาท` : '0 บาท'));
-  if (isPrimNo(tooth)) pv.append(el('div', { class: 'note', text: 'ฟันน้ำนม: บันทึกเป็นผลงาน ไม่นับในงบโครงการ (D-54)' }));
+  if (isPrimNo(tooth)) pv.append(el('div', { class: 'note', text: 'ฟันน้ำนม: บันทึกเป็นผลงาน ไม่นับในงบโครงการ' }));
   if (code === '170' && k.c.allergy_colophony) pv.append(el('div', { class: 'hint', text: 'นักเรียนคนนี้แพ้โคโลโฟนี ระวังฟลูออไรด์วาร์นิช' }));
 }
 ['#cKid', '#cCode', '#cTooth', '#cDate'].forEach(s => $(s).addEventListener('change', claimPreview));
-async function insertServices(rows) {
+async function insertServices(rows, onErr = toastErr) {
   const { data, error } = await sb.from('services').insert(rows).select();
-  if (error) { toastErr(error); return null; }
+  if (error) { onErr(error); return null; }
   const u = unit();
   data.forEach(r => u.tx.push(txFrom(r))); reindex(u);
   return data;
@@ -1163,27 +1449,34 @@ async function insertServices(rows) {
 $('#fOne').addEventListener('submit', async e => {
   e.preventDefault();
   if ($('#cSave').disabled) return;
+  if (!needProv()) return;
   const u = unit(), k = u.byId[$('#cKid').value], code = $('#cCode').value, d = fromInput($('#cDate').value);
-  if (!k || !d) return;
+  if (!k || !d || !code || !canServe(k)) return;
   const tooth = !$('#cToothWrap').hidden && $('#cTooth').value ? +$('#cTooth').value : null;
-  const pm = planMatch(k, { code, tooth, date: d });
+  const pf = planFor(k, { code, tooth, date: d });
   $('#cSave').disabled = true;
-  const ok = await insertServices([{ unit_id: u.id, study_id: k.id, code, tooth, service_date: toInput(d), plan_key: pm ? pm.key : null,
-    plan_month: pm && !pm.anytime ? monthOf(k.base, d) : null, from_plan: false, provider: S.prov || null, status: u.arm === 'cap' ? 'recorded' : 'draft' }]);
+  const ok = await insertServices([{ unit_id: u.id, study_id: k.id, code, tooth, service_date: toInput(d), plan_key: pf ? pf.row.key : null,
+    plan_month: pf ? pf.month : null, from_plan: false, provider: S.prov, status: u.arm === 'cap' ? 'recorded' : 'draft' }]);
   $('#cSave').disabled = false;
-  if (ok) { toast(`บันทึกแล้ว · ${k.id} · ${pname(code)}${tooth ? ' ซี่ ' + tooth : ''} · ${pm ? 'ติ๊กในแผนให้แล้ว' : 'นอกแผน'}`); renderClaims(); }
+  if (ok) { toast(`บันทึกแล้ว · ${k.id} · ${pname(code)}${tooth ? ' ซี่ ' + tooth : ''} · ${pf ? `ติ๊กในแผนให้แล้ว${pf.month ? ` (เดือนที่ ${pf.month}${pf.late ? ' ที่เลยกำหนด' : ''})` : ''}` : 'นอกแผน'}`); renderClaims(); }
 });
-function groupKids() {
+// Per-person activities (176, 175) write a row for each child: only children with complete consent who have
+// not withdrawn. A per-session 177 counts the children ticked and stores no study ID (team decision on R1-20).
+const perPerson = code => !(PRICE[code] && PRICE[code].group === 'session');
+function groupKids(all) {
   const rooms = $$('#gRooms input:checked').map(x => x.value);
-  return unit().kids.filter(k => rooms.includes(k.cls) && k.c.status !== 'withdrawn');
+  const inRooms = unit().kids.filter(k => rooms.includes(k.cls) && k.c.status !== 'withdrawn');
+  return all || !perPerson($('#gCode').value) ? inRooms : inRooms.filter(canServe);
 }
 function renderGroupList() {
-  const list = groupKids();
+  const list = groupKids(), left = groupKids(true).length - list.length;
   for (const id of [...S.gsel]) if (!list.some(k => k.id === id)) S.gsel.delete(id);
-  $('#gList').replaceChildren(...list.map(k => el('label', { class: 'chk' }, el('input', { type: 'checkbox', checked: S.gsel.has(k.id), onchange: e => { if (e.target.checked) S.gsel.add(k.id); else S.gsel.delete(k.id); groupPreview(); } }), ` ${k.id}`)));
+  fill($('#gList'), ...list.map(k => el('label', { class: 'chk' }, el('input', { type: 'checkbox', checked: S.gsel.has(k.id), onchange: e => { if (e.target.checked) S.gsel.add(k.id); else S.gsel.delete(k.id); groupPreview(); } }), ` ${k.id}`)),
+    left ? el('p', { class: 'tiny muted plist__note', text: `ไม่แสดง ${left} คนที่ยังไม่มีความยินยอมครบ (กิจกรรมนับต่อคนบันทึกได้เฉพาะคนที่ยินยอมแล้ว)` }) : null);
   $('#gAll').textContent = `ทำให้ทุกคน (${list.length} คน)`;
   groupPreview();
 }
+const topicHint = code => (code === '177' ? 'เช่น ขนมหวานกับฟันผุ' : 'เช่น สอนแปรงฟันแบบขยับปัด');
 function groupPreview() {
   const u = unit(), code = $('#gCode').value, n = S.gsel.size, price = refValue(u, code, null);
   $('#gCount').textContent = `เลือกแล้ว ${n} คน`;
@@ -1198,17 +1491,27 @@ function groupPreview() {
 }
 $('#gAll').addEventListener('click', () => { groupKids().forEach(k => S.gsel.add(k.id)); renderGroupList(); });
 $('#gNone').addEventListener('click', () => { S.gsel.clear(); renderGroupList(); });
-$('#gCode').addEventListener('change', () => { const c = $('#gCode').value; $('#gTopic').value = c === '177' ? 'ขนมหวานกับฟันผุ' : 'สอนแปรงฟันแบบขยับปัด'; groupPreview(); });
+// The topic is a placeholder, not a value, so a session is never saved under a topic nobody typed (R1-20).
+$('#gCode').addEventListener('change', () => { $('#gTopic').placeholder = topicHint($('#gCode').value); renderGroupList(); });
+$('#gMin').addEventListener('input', e => e.target.classList.remove('is-missing'));
 $('#fGroup').addEventListener('submit', async e => {
   e.preventDefault();
+  if (!needProv()) return;
   const u = unit(), code = $('#gCode').value, d = fromInput($('#gDate').value), n = S.gsel.size;
-  if (!n || !d || d > TODAY) { toast('เลือกผู้เข้าร่วมและวันที่ก่อนบันทึก'); return; }
-  const note = `${$('#gTopic').value.trim()} · ${$('#gMin').value} นาที`;
-  const status = u.arm === 'cap' ? 'recorded' : 'draft', gid = crypto.randomUUID(), minutes = +$('#gMin').value || null;
-  const rows = PRICE[code].group === 'session'
-    ? [{ unit_id: u.id, study_id: null, code, service_date: toInput(d), group_id: gid, group_note: note, n_participants: n, minutes, provider: S.prov || null, status }]
-    : [...S.gsel].map(id => { const k = u.byId[id]; const pm = examined(k) ? planMatch(k, { code, tooth: null, date: d }) : null;
-        return { unit_id: u.id, study_id: id, code, service_date: toInput(d), group_id: gid, group_note: note, minutes, plan_key: pm ? pm.key : null, from_plan: false, provider: S.prov || null, status }; });
+  const dp = dateProblem($('#gDate').value, 'วันที่');
+  if (!n || !d || dp) { toast(dp || 'เลือกผู้เข้าร่วมและวันที่ก่อนบันทึก'); return; }
+  const minutes = Math.round(+$('#gMin').value);
+  // 0 or 999 minutes are typing slips: ask again rather than store them (R1-20).
+  if (!(minutes >= 5 && minutes <= 240)) { const g = $('#gMin'); g.classList.add('is-missing'); g.focus(); toast('ระยะเวลา 5–240 นาที'); return; }
+  const topic = $('#gTopic').value.trim();
+  const note = `${topic ? topic + ' · ' : ''}${minutes} นาที`;
+  const status = u.arm === 'cap' ? 'recorded' : 'draft', gid = crypto.randomUUID();
+  const ids = [...S.gsel].filter(id => u.byId[id] && (!perPerson(code) || canServe(u.byId[id])));
+  if (!ids.length) { toast('ไม่มีผู้เข้าร่วมที่บันทึกได้'); return; }
+  const rows = !perPerson(code)
+    ? [{ unit_id: u.id, study_id: null, code, service_date: toInput(d), group_id: gid, group_note: note, n_participants: n, minutes, provider: S.prov, status }]
+    : ids.map(id => { const k = u.byId[id]; const pf = planFor(k, { code, tooth: null, date: d });
+        return { unit_id: u.id, study_id: id, code, service_date: toInput(d), group_id: gid, group_note: note, minutes, plan_key: pf ? pf.row.key : null, plan_month: pf ? pf.month : null, from_plan: false, provider: S.prov, status }; });
   $('#gSave').disabled = true;
   const ok = await insertServices(rows);
   $('#gSave').disabled = false;
@@ -1233,13 +1536,37 @@ async function setStatus(txs, status, label) {
   return true;
 }
 async function deleteTx(txs, label) {
-  if (!confirm(`ลบ ${label} หรือไม่?`)) return;
+  const ret = txs.filter(t => t.status === 'returned');
+  if (!confirm(`ลบ ${label} หรือไม่?${ret.length ? '\nรายการที่ทีมวิจัยส่งกลับจะถูกลบ แล้วบันทึกรายการที่ถูกต้องใหม่' : ''}`)) return;
   const ids = txs.map(t => t.id);
-  const { error } = await sb.from('services').delete().in('id', ids);
-  if (error) { toastErr(error); return; }
-  const u = unit(); u.tx = u.tx.filter(t => !ids.includes(t.id)); reindex(u);
-  toast('ลบแล้ว · ' + label);
+  // A returned claim can be removed (R1-15): the database lets a unit delete only drafts, so it goes back to draft first.
+  if (ret.length) {
+    const { error } = await sb.from('services').update({ status: 'draft' }).in('id', ret.map(t => t.id));
+    if (error) { toastErr(error); return; }
+    ret.forEach(t => { t.status = 'draft'; });
+  }
+  const { data, error } = await sb.from('services').delete().in('id', ids).select('id');
+  if (error) { toastErr(error); renderClaims(); return; }
+  const gone = new Set((data || []).map(r => r.id));
+  const u = unit(); u.tx = u.tx.filter(t => !gone.has(t.id)); reindex(u);
+  toast(gone.size === ids.length ? 'ลบแล้ว · ' + label : `ลบได้ ${gone.size}/${ids.length} รายการ รายการที่ส่งเบิกแล้วลบไม่ได้ กด "โหลดข้อมูลใหม่"`);
   renderClaims();
+}
+// Claims go in monthly: with a month chosen in the filter, only that month's drafts are sent (R1-15).
+function renderLedgerActions(u) {
+  const acts = $('#ledgerActions'); acts.replaceChildren();
+  if (u.arm === 'cap') return;
+  const all = S.lf.month === 'all';
+  const drafts = u.tx.filter(t => t.status === 'draft' && (all || monKey(t.date) === S.lf.month));
+  const byMonth = new Map();
+  for (const t of drafts) byMonth.set(monKey(t.date), (byMonth.get(monKey(t.date)) || 0) + 1);
+  const lines = [...byMonth.entries()].sort().map(([key, n]) => `- ${monKeyLabel(key)}: ${n} รายการ`).join('\n');
+  acts.append(el('button', { class: 'btn btn--primary', type: 'button', disabled: drafts.length ? null : true,
+    text: all ? `ส่งเบิกรายการที่ยังไม่ส่ง (${drafts.length})` : `ส่งเบิกเดือน ${monKeyLabel(S.lf.month)} (${drafts.length})`,
+    onclick: async () => {
+      if (confirm(`ส่งเบิก ${drafts.length} รายการให้ทีมวิจัยตรวจ?\n${lines}\nส่งแล้วแก้ไขหรือลบไม่ได้ จนกว่าทีมวิจัยจะส่งกลับ`)
+        && await setStatus(drafts, 'submitted', `ส่งเบิกแล้ว ${drafts.length} รายการ · รอทีมวิจัยตรวจ`)) renderClaims();
+    } }));
 }
 function renderClaims() {
   const u = unit();
@@ -1257,19 +1584,14 @@ function renderClaims() {
     $('#clStats').replaceChildren(
       tile('ยังไม่ส่ง', `${cnt('draft').length} รายการ`, `มูลค่าอ้างอิง ${fmt(sum(cnt('draft')))} บาท`),
       tile('ส่งแล้ว รอตรวจ', `${cnt('submitted').length} รายการ`),
-      tile('ส่งกลับแก้ไข', `${cnt('returned').length} รายการ`, cnt('returned').length ? 'แก้แล้วกด "ส่งใหม่" ที่แถวนั้น' : ''),
+      tile('ส่งกลับแก้ไข', `${cnt('returned').length} รายการ`, cnt('returned').length ? 'ถ้ารายการผิด กด "ลบ" แล้วบันทึกใหม่ ถ้าถูกแล้วกด "ส่งใหม่"' : ''),
       tile('อนุมัติแล้ว · โอนแล้ว', `${cnt('approved').length} · ${cnt('paid').length} รายการ`));
   }
-  const acts = $('#ledgerActions'); acts.replaceChildren();
-  if (u.arm !== 'cap') {
-    const drafts = cnt('draft');
-    acts.append(el('button', { class: 'btn btn--primary', type: 'button', disabled: drafts.length ? null : true, text: `ส่งเบิกรายการที่ยังไม่ส่ง (${drafts.length})`,
-      onclick: async () => { if (confirm(`ส่งเบิก ${drafts.length} รายการให้ทีมวิจัยตรวจ? ส่งแล้วแก้ไขหรือลบไม่ได้ จนกว่าทีมวิจัยจะส่งกลับ`) && await setStatus(drafts, 'submitted', `ส่งเบิกแล้ว ${drafts.length} รายการ · รอทีมวิจัยตรวจ`)) renderClaims(); } }));
-  }
-  const months = [...new Set(u.tx.map(t => `${t.date.getFullYear()}-${t.date.getMonth()}`))].sort().reverse();
-  $('#lMonth').replaceChildren(el('option', { value: 'all', text: 'ทุกเดือน' }), ...months.map(mk => { const [y, m] = mk.split('-').map(Number); return el('option', { value: mk, text: thMon(new Date(y, m, 1)) }); }));
+  const months = [...new Set(u.tx.map(t => monKey(t.date)))].sort().reverse();
+  $('#lMonth').replaceChildren(el('option', { value: 'all', text: 'ทุกเดือน' }), ...months.map(mk => el('option', { value: mk, text: monKeyLabel(mk) })));
   if (!['all', ...months].includes(S.lf.month)) S.lf.month = 'all';
   $('#lMonth').value = S.lf.month;
+  renderLedgerActions(u);
   const sts = u.arm === 'cap' ? [['all', 'ทุกสถานะ'], ['recorded', 'บันทึกแล้ว']] : [['all', 'ทุกสถานะ'], ['draft', 'ยังไม่ส่ง'], ['submitted', 'รอตรวจ'], ['returned', 'ส่งกลับแก้ไข'], ['approved', 'อนุมัติ รอโอน'], ['paid', 'โอนแล้ว']];
   $('#lStatus').replaceChildren(...sts.map(([v, lab]) => el('option', { value: v, text: lab })));
   $('#lStatus').value = S.lf.status;
@@ -1280,15 +1602,15 @@ function renderClaims() {
 }
 function renderLedger() {
   const u = unit(), flags = txFlags(u);
-  const q = S.lf.q.trim();
+  const q = S.lf.q.trim().toUpperCase();
   const rows = ledgerEntries(u).filter(x => {
-    if (S.lf.month !== 'all' && `${x.date.getFullYear()}-${x.date.getMonth()}` !== S.lf.month) return false;
+    if (S.lf.month !== 'all' && monKey(x.date) !== S.lf.month) return false;
     if (S.lf.status !== 'all' && x.status !== S.lf.status) return false;
     if (S.lf.kind === 'one' && x.group) return false;
     if (S.lf.kind === 'group' && !x.group) return false;
     if (S.lf.kind === 'extra' && (x.group || planMatch(u.byId[x.tx.kid], x.tx))) return false;
     if (S.lf.kind === 'flag' && (x.group || !(flags.get(x.tx.id) || []).length)) return false;
-    if (q) { if (x.group || !x.tx.kid || !x.tx.kid.includes(q)) return false; }
+    if (q) { if (x.group || !x.tx.kid || !x.tx.kid.toUpperCase().includes(q)) return false; }
     return true;
   });
   const tb = $('#ledgerBody'); tb.replaceChildren();
@@ -1311,12 +1633,12 @@ function renderLedger() {
       svc = el('span', {}, pname(x.code), ...notes.map(n => el('div', { class: 'tiny', style: 'color:var(--warn)', text: n })),
         x.tx.status === 'returned' && x.tx.returnNote ? el('div', { class: 'tiny', style: 'color:var(--warn)', text: 'ทีมวิจัย: ' + x.tx.returnNote }) : null);
       tooth = x.tx.tooth ? String(x.tx.tooth) : '–';
-      plan = pm ? el('span', { class: 'chip chip--ok', text: pm.anytime ? 'ตามแผน' : `ตามแผน ด.${monthOf(k.base, x.tx.date)}` }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' });
+      plan = pm ? el('span', { class: 'chip chip--ok', text: pm.anytime ? 'ตามแผน' : `ตามแผน ด.${txMonth(k, x.tx)}` }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' });
     }
     const label = x.gid ? `กิจกรรมกลุ่ม ${pname(x.code)} (${x.n} คน)` : `${x.tx.kid || 'ทั้งโรงเรียน'} · ${pname(x.code)}`;
     const act = el('span', { class: 'row', style: 'gap:6px' },
       x.status === 'returned' ? el('button', { class: 'linkbtn', type: 'button', text: 'ส่งใหม่', onclick: async () => { if (await setStatus(txs, 'submitted', 'ส่งใหม่แล้ว · รอทีมวิจัยตรวจ')) renderClaims(); } }) : null,
-      txs.every(canEdit) && x.status !== 'returned' ? el('button', { class: 'linkbtn', type: 'button', text: 'ลบ', onclick: () => deleteTx(txs, label) }) : null);
+      txs.every(canEdit) ? el('button', { class: 'linkbtn', type: 'button', text: 'ลบ', onclick: () => deleteTx(txs, label) }) : null);
     tb.append(el('tr', {}, el('td', { text: thShort(x.date) }), el('td', {}, who), el('td', { class: 'wrapcell' }, svc), el('td', { class: 'mono', text: tooth }), el('td', {}, plan),
       el('td', { class: 'num' + (x.ref ? '' : ' amt-0'), text: fmt2(x.ref) }), el('td', {}, statusEl(txs[0])), el('td', { text: x.by || '–' }), el('td', {}, act)));
   }
@@ -1324,7 +1646,7 @@ function renderLedger() {
   $('#ledgerCount').textContent = `แสดง ${Math.min(rows.length, S.lf.limit)} จาก ${rows.length} รายการ (กิจกรรมกลุ่มรวมเป็นแถวเดียว)`;
   $('#ledgerMore').hidden = rows.length <= S.lf.limit;
 }
-[['#lMonth', 'month'], ['#lStatus', 'status'], ['#lKind', 'kind']].forEach(([s, key]) => $(s).addEventListener('change', e => { S.lf[key] = e.target.value; S.lf.limit = 40; renderLedger(); }));
+[['#lMonth', 'month'], ['#lStatus', 'status'], ['#lKind', 'kind']].forEach(([s, key]) => $(s).addEventListener('change', e => { S.lf[key] = e.target.value; S.lf.limit = 40; renderLedger(); if (key === 'month') renderLedgerActions(unit()); }));
 $('#lQ').addEventListener('input', e => { S.lf.q = e.target.value; S.lf.limit = 40; renderLedger(); });
 $('#ledgerMore').addEventListener('click', () => { S.lf.limit += 40; renderLedger(); });
 
@@ -1332,8 +1654,12 @@ $('#ledgerMore').addEventListener('click', () => { S.lf.limit += 40; renderLedge
 // Claims review: approve or return submitted services, record transfers. Payable amounts by fee schedule come in v1.2.
 function reviewSection(ids) {
   if (S.me.role !== 'research') return null;
+  // The same notes units see (duplicates, outside the budget), computed once per unit (R1-15).
+  const flags = Object.fromEntries(ids.map(id => [id, txFlags(S.units[id])]));
+  const notesOf = x => flags[x.u.id].get(x.tx.id) || [];
   const all = ids.flatMap(id => S.units[id].tx.map(tx => ({ u: S.units[id], tx })));
   const sub = all.filter(x => x.tx.status === 'submitted'), appr = all.filter(x => x.tx.status === 'approved');
+  const nFlag = sub.filter(x => notesOf(x).length).length;
   const act = async (list, status, label, extra) => {
     const byStatus = { status, ...(extra || {}) };
     const { error } = await sb.from('services').update(byStatus).in('id', list.map(x => x.tx.id));
@@ -1344,7 +1670,7 @@ function reviewSection(ids) {
   const tb = el('tbody');
   for (const x of sub.slice(0, 200)) tb.append(el('tr', {},
     el('td', { text: thShort(x.tx.date) }), el('td', { class: 'mono', text: x.u.letter }), el('td', { class: 'mono', text: x.tx.kid || 'กลุ่ม' }),
-    el('td', { class: 'wrapcell', text: pname(x.tx.code) }), el('td', { class: 'mono', text: x.tx.tooth ? String(x.tx.tooth) : '–' }),
+    el('td', { class: 'wrapcell' }, pname(x.tx.code), ...notesOf(x).map(n => el('div', { class: 'tiny', style: 'color:var(--warn)', text: n }))), el('td', { class: 'mono', text: x.tx.tooth ? String(x.tx.tooth) : '–' }),
     el('td', { class: 'num', text: fmt2(refValue(x.u, x.tx.code, x.tx.tooth)) }),
     el('td', {}, el('span', { class: 'row', style: 'gap:6px' },
       el('button', { class: 'linkbtn', type: 'button', text: 'อนุมัติ', onclick: () => act([x], 'approved', 'อนุมัติแล้ว 1 รายการ') }),
@@ -1352,8 +1678,9 @@ function reviewSection(ids) {
   return el('section', {},
     el('h2', { text: 'ตรวจรายการเบิก' }),
     el('div', { class: 'row' },
-      el('button', { class: 'btn btn--primary', type: 'button', disabled: sub.length ? null : true, text: `อนุมัติทั้งหมดที่รอตรวจ (${sub.length})`, onclick: () => { if (confirm(`อนุมัติ ${sub.length} รายการ?`)) act(sub, 'approved', `อนุมัติแล้ว ${sub.length} รายการ`); } }),
+      el('button', { class: 'btn btn--primary', type: 'button', disabled: sub.length ? null : true, text: `อนุมัติทั้งหมดที่รอตรวจ (${sub.length})`, onclick: () => { if (confirm(`อนุมัติ ${sub.length} รายการ${nFlag ? ` (มีข้อสังเกต ${nFlag} รายการ)` : ''} ใช่หรือไม่`)) act(sub, 'approved', `อนุมัติแล้ว ${sub.length} รายการ`); } }),
       el('button', { class: 'btn', type: 'button', disabled: appr.length ? null : true, text: `บันทึกว่าโอนแล้ว (${appr.length})`, onclick: () => { if (confirm(`บันทึกว่าโอนเงินแล้ว ${appr.length} รายการ?`)) act(appr, 'paid', `บันทึกการโอนแล้ว ${appr.length} รายการ`); } })),
+    nFlag ? el('p', { class: 'small', style: 'color:var(--warn)', text: `มีข้อสังเกต ${nFlag} รายการ (ดูใต้ชื่อบริการ) ตรวจก่อนอนุมัติทั้งหมด` }) : null,
     sub.length ? el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
       el('thead', {}, el('tr', {}, ...['วันที่', 'หน่วย', 'นักเรียน', 'บริการ', 'ซี่', 'มูลค่าอ้างอิง', ''].map((h, i) => el('th', { scope: 'col', class: i === 5 ? 'num' : '', text: h })))), tb))
       : el('p', { class: 'small muted', text: 'ไม่มีรายการรอตรวจ' }),
@@ -1374,11 +1701,11 @@ function renderResearch() {
       el('td', { class: 'num', text: String(n) }), el('td', { class: 'num', text: String(consent) }), el('td', { class: 'num', text: String(ex) }), el('td', { class: 'num', text: String(absent) }),
       el('td', { class: 'num', text: `${lv.vhigh} · ${lv.high} · ${lv.low}` }), el('td', { class: 'num', text: String(u.kids.filter(needsReferral).length) })));
   }
-  $('#research').replaceChildren(
+  fill($('#research'),
     el('section', {},
       el('p', { class: 'eyebrow', text: 'ทีมวิจัย · คณะแพทยศาสตร์โรงพยาบาลรามาธิบดี' }),
       el('h1', { class: 'h-unit', text: 'ภาพรวมทุกหน่วย' }),
-      el('p', { class: 'small muted', text: `ข้อมูล ณ ${thDate(TODAY)} · ทีมวิจัยเห็นรหัสวิจัย ไม่เห็นชื่อหรือเลขบัตรประชาชน (D-18)` }),
+      el('p', { class: 'small muted', text: `${loadedText()} · ทีมวิจัยเห็นรหัสวิจัย ไม่เห็นชื่อหรือเลขบัตรประชาชน (D-18)` }),
       el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
         el('thead', {}, el('tr', {}, ...['หน่วย', 'รูปแบบการจ่าย', 'ลงทะเบียน', 'ยินยอมครบ', 'ตรวจแล้ว', 'ขาดวันตรวจ', 'เสี่ยง สูงมาก · สูง · ต่ำ', 'ต้องส่งต่อ'].map((h, i) => el('th', { scope: 'col', class: i >= 2 ? 'num' : '', text: h })))), tb))),
     reviewSection(ids),
@@ -1389,6 +1716,7 @@ function renderResearch() {
 }
 
 /* ================================================================ boot */
+$$('input[type="date"], input[type="month"]').forEach(i => ['input', 'change'].forEach(ev => i.addEventListener(ev, () => beHint(i))));
 (async () => {
   if (!CFG.url || !CFG.anonKey) { $('#lgMsg').replaceChildren(el('div', { class: 'err', text: 'ยังไม่ได้ตั้งค่า config.js (URL และ anon key ของ Supabase)' })); return; }
   const { data: { session } } = await sb.auth.getSession();

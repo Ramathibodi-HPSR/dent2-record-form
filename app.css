@@ -26,5 +26,87 @@ body { padding-bottom: 72px; }
 .big-id { font-size: 1.25rem; }
 .printonly { display: none; }
 @media print { .printonly { display: block !important; margin: 12px 0; } }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 .ledger td .linkbtn { font-size: var(--fs-tiny); }
+
+/* ---------------------------------------------------------------- UX review R1 (31 Oct 2026) */
+/* R1-02, R1-04, R1-20: something the user still has to fill or choose */
+.is-missing { outline: 2px solid var(--warn); outline-offset: 1px; }
+tr.is-missing td { box-shadow: inset 0 0 0 2px var(--warn); }
+/* R1-04: the toast never covers or blocks the save bar */
+.toast { pointer-events: none; }
+#saveBar:not([hidden]) ~ .toast { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+/* R1-07: the study ID is the biggest text in the child bar, not the smallest (".kv span" matched it) */
+.kv > b span { font-size: inherit; color: inherit; }
+.kv .big-id { font-size: 1.25rem; color: var(--text-primary); }
+.kv > b .chip { font-size: var(--fs-small); color: var(--text-primary); }
+/* R1-11: the screen-reader label in a table header stays inside the table's scroll box */
+.tablewrap, .pgridwrap, .chartwrap { position: relative; }
+/* R1-17: Thai text in the Thai font and at readable sizes */
+:root { --fs-tiny: .8rem; }
+.acct-chip b { font-family: var(--font); font-size: 1em; }
+.fpm span { font-size: .7rem; }
+.pgrid .mcal, .anycell small { font-size: .72rem; }
+/* R1-09, R1-17: with the reload button and the Thai unit name, the signed-in header needs the brand subtitle's room below 1400px */
+@media (max-width: 1400px) { .topbar__in:has(#acctBox:not([hidden])) .brand span { display: none; } }
+/* R1-18: Buddhist-era date under each date box */
+.be-hint:empty { display: none; }
+.be-hint.be-warn { color: var(--warn); }
+/* R1-19: home tiles open the filtered student list */
+.tile--link { text-align: left; cursor: pointer; font: inherit; color: inherit; width: 100%; }
+.tile--link:hover { border-color: var(--accent); }
+.tile__go { font-size: var(--fs-small); color: var(--accent); margin-top: auto; }
+/* R1-20: note under the participant list spans the whole grid */
+.plist__note { grid-column: 1 / -1; margin: 4px 0 0; }
+/* R1-10: finger-sized targets on tablets and phones */
+@media (pointer: coarse) {
+  .cellbtn { width: 40px; height: 40px; }
+  .pno { min-height: 36px; }
+  .pres { gap: 6px; }
+  .btn, .seg button, .tabs button, .subtabs button, .qchips button { min-height: 40px; }
+  .chk { min-height: 40px; }
+  .chk input, .plist .chk input { width: 22px; height: 22px; }
+  .linkbtn { min-height: 40px; padding: 0 6px; }
+  details > summary { padding-block: 10px; }
+}
+/* R1-13: the parents' copy of the plan prints black on white, all 12 months and "ไม่ระบุเดือน" on one A4 landscape page */
+@page { size: A4 landscape; margin: 10mm; }
+@media print {
+  :root {
+    --page-bg: #fff; --surface: #fff; --surface-2: #fff; --surface-3: #f2f2f2;
+    --text-primary: #000; --text-secondary: #000; --text-muted: #444; --text-inverse: #fff;
+    --border: #bbb; --border-strong: #666; --accent: #1d5fae; --warn: #8a5000; --ok: #1d7a4c; --crit: #b3261e;
+  }
+  main { padding-block: 0; }
+  .pgridwrap { overflow: visible; border-color: #999; }
+  .pgrid { min-width: 0; font-size: 9pt; }
+  .pgrid th, .pgrid td { padding: 3px 2px; }
+  .pgrid .rowh { position: static; min-width: 0; max-width: none; width: 30%; }
+  .pgrid .rowh .tiny { font-weight: 400; }
+  .pgrid .anycol { min-width: 0; }
+  .pgrid .cur { background: none; }
+  .cellbtn { width: 18px; height: 18px; font-size: 8pt; }
+  .cellbtn.is-done { background: none; color: #000; border-color: #000; }
+  .tile__go, .be-hint { display: none !important; }
+  #fileHead .ok, #fileHead .alert { display: none !important; }
+}
+.guide-link { margin-left: auto; text-decoration: none; }
+.guide-link + .draft { margin-left: 8px; }
+
+/* ---------------------------------------------------------------- UX review R2 (31 Oct 2026) */
+/* R2-02: keep the signed-in header short on tablets (measured by the reviewer: 768×1024 149 px, 1024×768 101 px) */
+@media (max-width: 1100px) {
+  .topbar__in:has(#acctBox:not([hidden])) .draft { display: none; }   /* the account chip already says ทดสอบ */
+  .guide-link { margin-left: 0; }
+}
+@media (max-width: 900px) {
+  .topbar { position: static; }   /* extends the 640px rule in style.css */
+  .topbar__in:has(#acctBox:not([hidden])) .brand { display: none; }   /* the home screen heading carries the unit name */
+  .acct-chip b { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+/* R2-05: the participant list shows most of a class on touch screens, not 5 rows */
+@media (pointer: coarse) { .plist { max-height: min(60vh, 560px); } }
+/* R2-03: the issued-ID banner above the enrolment form */
+#enDone:empty { display: none; }
+/* R2-07: the parents' printout leaves out the paid data-collection row (the progress figure is .noprint) */
+@media print { .is-study-row { display: none; } }
