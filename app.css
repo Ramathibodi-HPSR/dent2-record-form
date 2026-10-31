@@ -1,0 +1,30 @@
+/* v1.0 additions to the prototype theme (style.css is v0.7 unchanged). */
+/* The v0.7 artifact host supplied this rule; a standalone page needs it, since .screen and .acct-box set display. */
+[hidden] { display: none !important; }
+body { padding-bottom: 72px; }
+.loginform { max-width: 420px; }
+.field--inline { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
+.screen > section > .linkbtn { align-self: flex-start; }
+.field--inline select { min-width: 7rem; }
+.savebar { position: fixed; inset: auto 0 0 0; z-index: 30; background: var(--surface-2); border-top: 1px solid var(--warn); padding: 10px 0; }
+.savebar .wrap { gap: 12px; flex-wrap: wrap; }
+.err { border: 1px solid var(--crit); background: rgba(230, 103, 103, .10); color: var(--text-primary); border-radius: var(--radius-sm); padding: 8px 12px; font-size: var(--fs-small); }
+.ok { border: 1px solid var(--ok); background: rgba(76, 195, 138, .10); color: var(--text-primary); border-radius: var(--radius-sm); padding: 8px 12px; font-size: var(--fs-small); }
+.loading { color: var(--text-muted); padding: 24px 0; }
+.testflag { border: 1px dashed var(--warn); color: var(--warn); border-radius: 999px; padding: 0 8px; font-size: var(--fs-tiny); margin-left: 8px; }
+.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+.dl-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.cellbtn[aria-busy="true"] { opacity: .5; }
+@media print {
+  :root { color-scheme: light; }
+  body { background: #fff; color: #000; padding: 0; }
+  .topbar, .tabs, .subtabs, .noprint, .savebar, .toast, #fileHead details, #fp-exam, #fp-tx, [data-go] , .field { display: none !important; }
+  #fp-plan { display: block !important; }
+  .card { background: #fff; border-color: #999; }
+  .pgrid th, .pgrid td, .small, .muted, .tiny { color: #000 !important; }
+}
+.big-id { font-size: 1.25rem; }
+.printonly { display: none; }
+@media print { .printonly { display: block !important; margin: 12px 0; } }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ledger td .linkbtn { font-size: var(--fs-tiny); }

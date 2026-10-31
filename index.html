@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Dent-II Record Form</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar__in">
+    <span class="brand">Dent-II<span>ระบบบันทึกทันตสุขภาพรายบุคคล</span></span>
+    <span class="acct-box" id="acctBox" hidden>
+      <span class="acct-chip" id="acctChip"></span>
+      <label class="field field--inline" id="provBox" hidden>ผู้บันทึก<select id="provSel" aria-label="ผู้ตรวจหรือผู้ให้บริการที่ใช้เครื่องนี้"></select></label>
+      <button class="btn btn--ghost" type="button" id="logoutBtn">ออกจากระบบ</button>
+    </span>
+    <span class="draft" id="verTag">v1.0 · ทดสอบ</span>
+  </div>
+  <nav class="wrap tabs" id="tabs" role="tablist" aria-label="หน้าจอ" hidden></nav>
+</header>
+
+<main class="wrap">
+
+<!-- =============================================================== SIGN-IN -->
+<div id="login" class="screen">
+  <section class="hero">
+    <p class="eyebrow">Dent-II · โครงการกลไกการเงินเพื่อทันตสุขภาพในโรงเรียน กรุงเทพมหานคร</p>
+    <h1>เข้าสู่ระบบ</h1>
+    <p class="lead">ใช้ชื่อผู้ใช้และรหัสผ่านที่ทีมวิจัยส่งให้หน่วยบริการ แต่ละบัญชีเห็นเฉพาะนักเรียนและบริการของหน่วยตัวเอง</p>
+  </section>
+  <section>
+    <form class="card stack loginform" id="loginForm" novalidate>
+      <label class="field">ชื่อผู้ใช้หรืออีเมล<input id="lgUser" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+      <label class="field">รหัสผ่าน<input id="lgPass" type="password" autocomplete="current-password" required></label>
+      <div class="row"><button class="btn btn--primary" type="submit" id="lgBtn">เข้าสู่ระบบ</button></div>
+      <div id="lgMsg" aria-live="polite"></div>
+    </form>
+    <p class="small muted">ใช้เครื่องร่วมกับผู้อื่น: กด "ออกจากระบบ" ทุกครั้งหลังใช้งาน ระบบออกจากระบบเองเมื่อไม่มีการใช้งาน 30 นาที</p>
+  </section>
+</div>
+
+<!-- =============================================================== HOME -->
+<div id="home" class="screen" role="tabpanel" hidden></div>
+
+<!-- =============================================================== STUDENTS (cards) -->
+<div id="kids" class="screen" role="tabpanel" hidden>
+  <section>
+    <div class="row between">
+      <div class="stack"><h2>นักเรียน</h2><p class="small muted" id="kidsSub"></p></div>
+      <button class="btn btn--primary" type="button" data-go="enrol">+ ลงทะเบียนนักเรียน</button>
+    </div>
+    <div class="qchips" id="qchips" role="group" aria-label="ตัวกรองด่วน"></div>
+    <div class="filters">
+      <label class="field">ค้นหารหัสนักเรียน<input id="kfQ" type="search" placeholder="เช่น 53-001" autocomplete="off"></label>
+      <label class="field">ห้อง<select id="kfCls"></select></label>
+      <label class="field">ความเสี่ยง<select id="kfRisk"><option value="all">ทุกระดับ</option><option value="low">เสี่ยงต่ำ</option><option value="high">เสี่ยงสูง</option><option value="vhigh">เสี่ยงสูงมาก</option></select></label>
+      <label class="field">สถานะ<select id="kfSt"><option value="all">ทั้งหมด</option><option value="miss">ขาดบริการ (เลยกำหนด)</option><option value="due">ถึงกำหนดเดือนนี้</option><option value="ref">ส่งต่อแล้ว รอผล</option><option value="ok">ครบตามแผน</option><option value="absent">ยังไม่ได้ตรวจ</option></select></label>
+      <label class="field">ยังไม่ได้รับ<select id="kfMiss"><option value="all">ทุกบริการ</option><option value="seal">เคลือบหลุมร่องฟัน</option><option value="fl">ฟลูออไรด์</option><option value="recall">ตรวจติดตาม</option><option value="tx">รักษา</option><option value="ref">ส่งต่อ</option><option value="brush">ฝึกแปรงฟัน</option></select></label>
+      <label class="field">จัดกลุ่มตาม<select id="kfGroup"><option value="cls">ห้องเรียน</option><option value="miss">สิ่งที่ยังไม่ได้รับ</option><option value="risk">ความเสี่ยง</option><option value="none">ไม่จัดกลุ่ม</option></select></label>
+    </div>
+    <div class="legend" aria-label="คำอธิบายฟันกรามแท้ในการ์ด">
+      <span>ฟันกรามแท้ซี่ที่หนึ่ง (บน 16 · 26 / ล่าง 46 · 36):</span>
+      <span><i class="lsw sealed"></i>เคลือบแล้ว</span>
+      <span><i class="lsw need"></i>ต้องเคลือบ</span>
+      <span><i class="lsw high"></i>ผุ (ICDAS ≥3)</span>
+      <span><i class="lsw none"></i>ยังไม่ขึ้น</span>
+    </div>
+  </section>
+  <div id="kidGroups" class="stack-lg"></div>
+</div>
+
+<!-- =============================================================== ENROL / EDIT ENROLMENT -->
+<div id="enrol" class="screen" role="tabpanel" hidden>
+  <section>
+    <button class="linkbtn" type="button" data-go="kids">← นักเรียนทั้งหมด</button>
+    <div class="stack"><h2 id="enTitle">ลงทะเบียนนักเรียน</h2><p class="small muted" id="enSub">ระบบไม่เก็บชื่อ เลขบัตรประชาชน หรือข้อมูลผู้ปกครอง รหัสนักเรียนออกให้อัตโนมัติเมื่อบันทึก ให้เขียนรหัสไว้ข้างชื่อเด็กในรายชื่อของหน่วย</p></div>
+    <form class="stack" id="enForm" novalidate>
+      <div class="card stack">
+        <h3>นักเรียน</h3>
+        <div class="g2f">
+          <label class="field">โรงเรียน<select id="enSchool" required></select></label>
+          <label class="field">ห้อง<select id="enClass" required></select></label>
+          <label class="field">เพศ<select id="enSex" required><option value="">– เลือก –</option><option value="M">ชาย</option><option value="F">หญิง</option></select></label>
+          <label class="field">เดือนปีเกิด (ค.ศ.)<input id="enBym" type="month"></label>
+        </div>
+      </div>
+      <div class="card stack">
+        <h3>สิทธิและความยินยอม</h3>
+        <div class="g2f">
+          <label class="chk"><input type="checkbox" id="enUc"> ตรวจสิทธิแล้ว เป็นสิทธิ UC</label>
+          <label class="field">วันที่ตรวจสิทธิ<input id="enUcDate" type="date"></label>
+          <label class="field">วิธีตรวจสิทธิ<select id="enUcMethod"><option value="">–</option><option>ตรวจสิทธิออนไลน์</option><option>บัตรประชาชน / สูติบัตร</option><option>อื่น ๆ</option></select></label>
+          <label class="field">วันที่ผู้ปกครองลงนามยินยอม<input id="enConsent" type="date"></label>
+          <label class="chk"><input type="checkbox" id="enAssent"> เด็กยินยอม (assent)</label>
+        </div>
+        <p class="small muted">ยังไม่มีความยินยอมของผู้ปกครองและเด็ก ระบบไม่ให้บันทึกผลตรวจ</p>
+      </div>
+      <div class="card stack">
+        <h3>สุขภาพ</h3>
+        <div class="g2f">
+          <label class="field">โรคประจำตัว / ความต้องการพิเศษ (ห้ามใส่ชื่อ)<input id="enCond" type="text" autocomplete="off" placeholder="ไม่มี"></label>
+          <label class="chk"><input type="checkbox" id="enAgSilver"> แพ้เงิน (ห้ามใช้ SDF)</label>
+          <label class="chk"><input type="checkbox" id="enAgColo"> แพ้โคโลโฟนี (ระวังฟลูออไรด์วาร์นิช)</label>
+        </div>
+      </div>
+      <div id="enMsg" aria-live="polite"></div>
+      <div class="row"><button class="btn btn--primary" type="submit" id="enSave">บันทึกการลงทะเบียน</button><button class="linkbtn" type="button" data-go="kids">ยกเลิก</button></div>
+    </form>
+  </section>
+</div>
+
+<!-- =============================================================== CHILD FILE -->
+<div id="file" class="screen" role="tabpanel" hidden>
+  <section>
+    <div class="row between">
+      <button class="linkbtn" type="button" data-go="kids">← นักเรียนทั้งหมด</button>
+      <label class="field">เปิดแฟ้ม<select id="kidSel"></select></label>
+    </div>
+    <div class="card stack" id="fileHead"></div>
+    <div class="subtabs" role="tablist" aria-label="แฟ้มนักเรียน">
+      <button type="button" role="tab" id="ft-exam" aria-controls="fp-exam" data-ft="exam">ผลตรวจ</button>
+      <button type="button" role="tab" id="ft-plan" aria-controls="fp-plan" data-ft="plan">แผนการดูแล</button>
+      <button type="button" role="tab" id="ft-tx" aria-controls="fp-tx" data-ft="tx">บริการที่บันทึก</button>
+    </div>
+  </section>
+
+  <div id="fp-exam" class="fpanel" role="tabpanel" aria-labelledby="ft-exam">
+    <div id="examStart"></div>
+    <div id="examBody" class="fpanel">
+      <section>
+        <h3>การตรวจครั้งนี้</h3>
+        <div class="grid g4">
+          <label class="field">การตรวจ<select id="vRound"><option value="baseline">ครั้งที่ 1 (ครั้งแรก)</option><option value="m6" disabled>ครั้งที่ 2 (6 เดือน) · v1.3</option><option value="m12" disabled>ครั้งที่ 3 (12 เดือน) · v1.3</option></select></label>
+          <label class="field">วันที่ตรวจ<input id="vDate" type="date"></label>
+          <label class="field">รหัสผู้ตรวจ (ผ่านการปรับมาตรฐาน)<select id="vExam"></select></label>
+          <label class="field">สถานที่<select id="vPlace"><option value="van">รถทันตกรรมที่โรงเรียน</option><option value="school">ที่โรงเรียน</option><option value="clinic">ที่หน่วยบริการ</option></select></label>
+        </div>
+        <div class="card stack">
+          <span class="small muted">ต้องได้รับการรักษาเร่งด่วน</span>
+          <div class="urg" id="urgent">
+            <label class="chk"><input type="checkbox" id="u-pain" data-u="pain"> ปวด เสียว</label>
+            <label class="chk"><input type="checkbox" id="u-swell" data-u="swell"> บวม หนอง</label>
+            <label class="chk"><input type="checkbox" id="u-big" data-u="big"> ฟันแท้ผุ (ขนาดใหญ่)</label>
+          </div>
+          <div id="urgentMsg"></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="row between"><h3>ส่วนที่ 1 · ประเมินความเสี่ยงฟันผุ (อายุ 6–12 ปี)</h3><span id="riskChip"></span></div>
+        <div class="tablewrap">
+          <table class="risk"><tbody id="riskBody"></tbody>
+            <tfoot><tr><td>คะแนนรวม</td><td class="num" id="riskTotal">0</td></tr></tfoot>
+          </table>
+        </div>
+        <div class="riskband" id="riskBand">
+          <div data-l="low"><b>เสี่ยงต่ำ 0–2</b><br>นัดตรวจซ้ำ 6–12 เดือน</div>
+          <div data-l="high"><b>เสี่ยงสูง 3–5</b><br>นัดตรวจซ้ำ 6 เดือน</div>
+          <div data-l="vhigh"><b>เสี่ยงสูงมาก ≥6</b><br>นัดตรวจซ้ำ 3 เดือน</div>
+        </div>
+        <div id="riskHint"></div>
+      </section>
+
+      <section>
+        <div class="row between">
+          <h3>ส่วนที่ 2 · แผนภูมิฟัน ICDAS (ฟันชุดผสม)</h3>
+          <button class="btn" type="button" id="presetBtn">ตั้งค่าเริ่มต้น: ช่องปากเด็ก 7 ปีปกติ</button>
+        </div>
+        <p class="small muted">แตะเลขซี่เพื่อวงกลมซี่ที่พบ (บน: ฟันน้ำนม · ล่าง: ฟันแท้ แตะซ้ำเพื่อยกเลิก) แตะกล่องรหัสเพื่อแก้ Code A · Code B · ความต้องการการรักษา ป้าย "ผุ" ขึ้นเองเมื่อ ICDAS ≥3</p>
+        <div class="chartwrap">
+          <p class="arch-label">ขากรรไกรบน (ขวาของเด็ก → ซ้ายของเด็ก)</p>
+          <div class="arch" id="archU"></div>
+          <p class="arch-label">ขากรรไกรล่าง</p>
+          <div class="arch" id="archL"></div>
+        </div>
+        <div class="legend">
+          <span><i class="lsw pres"></i>ซี่ที่พบ (วงกลม)</span>
+          <span><i class="lsw fpm"></i>ฟันกรามแท้ซี่ที่หนึ่ง</span>
+          <span><i class="lsw sealed"></i>เคลือบหลุมร่องฟัน</span>
+          <span><i class="lsw low"></i>ICDAS 1–2</span>
+          <span><i class="lsw mid"></i>ICDAS 3–4</span>
+          <span><i class="lsw high"></i>ICDAS 5–6</span>
+          <span><i class="lsw none"></i>ยังไม่ขึ้น / ไม่มีฟัน</span>
+        </div>
+        <div class="card" id="editor"></div>
+      </section>
+
+      <section>
+        <h3>การตรวจคราบจุลินทรีย์และเหงือก (ฟันดัชนี)</h3>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th scope="col">ดัชนี</th><th scope="col" class="num">16B</th><th scope="col" class="num">11La</th><th scope="col" class="num">26B</th><th scope="col" class="num">46Li</th><th scope="col" class="num">31La</th><th scope="col" class="num">36Li</th><th scope="col" class="num">เฉลี่ย</th></tr></thead>
+            <tbody id="pigiBody"></tbody>
+          </table>
+        </div>
+        <p class="small muted">คะแนน 0–3 ต่อซี่ ตามแบบฟอร์ม final ถ้าฟันดัชนียังไม่ขึ้นให้ใช้ซี่ข้างเคียงตามที่ทีมทันตกรรมกำหนด</p>
+      </section>
+
+      <section>
+        <div class="row between"><h3>สรุปผลตรวจ</h3><span class="chip chip--plain">นับเป็นฟันผุเมื่อ ICDAS ≥3</span></div>
+        <div class="card sum" id="summary"></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="fp-plan" class="fpanel" role="tabpanel" aria-labelledby="ft-plan" hidden>
+    <section>
+      <div class="row between">
+        <div class="stack"><h3 id="planTitle">แผนการดูแล</h3><p class="small muted" id="planSub"></p></div>
+        <button class="btn noprint" type="button" id="printBtn">พิมพ์แผนให้ผู้ปกครอง</button>
+      </div>
+      <div class="legend noprint">
+        <span><i class="lsw"></i>ตามแผน ยังไม่ทำ</span>
+        <span><i class="lsw" style="border-color:var(--text-primary)"></i>ถึงกำหนดเดือนนี้</span>
+        <span><i class="lsw" style="border-color:var(--warn)"></i>เลยกำหนด</span>
+        <span><i class="lsw" style="background:var(--accent);border-color:var(--accent)"></i>ทำแล้ว (บันทึกบริการแล้ว)</span>
+        <span>● ทำนอกแผน</span>
+        <span>– ไม่อยู่ในแผนเดือนนั้น</span>
+      </div>
+      <div class="pgridwrap" id="planGrid"></div>
+      <p class="small muted noprint" id="planHint"></p>
+    </section>
+    <section>
+      <h3 class="noprint">มูลค่าของแผนทั้งปี (ราคาอ้างอิง)</h3>
+      <div class="card totals noprint" id="planTotals"></div>
+      <p class="printonly">ชื่อนักเรียน ........................................................ (เขียนด้วยมือ)</p>
+      <div class="card stack">
+        <span class="small muted">คำแนะนำการดูแลที่บ้าน (พิมพ์ให้ผู้ปกครอง)</span>
+        <p class="small" id="homecare"></p>
+      </div>
+    </section>
+  </div>
+
+  <div id="fp-tx" class="fpanel" role="tabpanel" aria-labelledby="ft-tx" hidden>
+    <section>
+      <div class="row between"><h3>บริการที่บันทึกของนักเรียนคนนี้</h3><button class="btn" type="button" id="kidAddBtn">+ บันทึกบริการให้นักเรียนคนนี้</button></div>
+      <div class="tablewrap">
+        <table class="ledger">
+          <thead><tr><th scope="col">วันที่</th><th scope="col" class="num">เดือนที่</th><th scope="col">บริการ</th><th scope="col">ซี่</th><th scope="col">แผน</th><th scope="col" class="num">มูลค่าอ้างอิง</th><th scope="col">สถานะ</th><th scope="col">ผู้บันทึก</th></tr></thead>
+          <tbody id="kidTxBody"></tbody>
+        </table>
+      </div>
+      <p class="small muted">ตารางนี้แทนช่อง "วันที่ · การรักษา · ลายมือชื่อ" ในแบบฟอร์มกระดาษ ผู้บันทึกมาจากช่อง "ผู้บันทึก" ด้านบน</p>
+    </section>
+  </div>
+</div>
+
+<!-- =============================================================== CLAIMS / SERVICE RECORDING (D-65) -->
+<div id="claims" class="screen" role="tabpanel" hidden>
+  <section>
+    <div class="stack"><h2 id="clTitle">บันทึกและเบิก</h2><p class="small muted" id="clSub"></p></div>
+    <div class="tiles" id="clStats"></div>
+  </section>
+
+  <section class="grid g2">
+    <form class="card stack" id="fOne" novalidate>
+      <h3>บันทึกบริการรายคน</h3>
+      <p class="small muted">ใช้กับบริการนอกแผน หรือบริการที่ไม่ได้ติ๊กจากแผนการดูแล ถ้าตรงกับแผน ช่องในแผนจะติ๊กให้เอง</p>
+      <div class="g2f">
+        <label class="field">รหัสนักเรียน<select id="cKid"></select></label>
+        <label class="field">วันที่ให้บริการ<input id="cDate" type="date"></label>
+        <label class="field">บริการ<select id="cCode"></select></label>
+        <label class="field" id="cToothWrap">ซี่<select id="cTooth"></select></label>
+      </div>
+      <div class="preview" id="cPreview" aria-live="polite"></div>
+      <div class="row"><button class="btn btn--primary" type="submit" id="cSave">บันทึกบริการ</button></div>
+    </form>
+
+    <form class="card stack" id="fGroup" novalidate>
+      <h3>บันทึกกิจกรรมกลุ่ม</h3>
+      <p class="small muted">กิจกรรมที่ทำพร้อมกันทั้งห้องหรือทั้งโรงเรียน เช่น สอนแปรงฟัน 30 นาที</p>
+      <div class="g2f">
+        <label class="field">กิจกรรม<select id="gCode">
+          <option value="177">ทันตสุขศึกษา · นับต่อครั้ง</option>
+          <option value="176">ฝึกแปรงฟัน + อุปกรณ์ · นับต่อคน</option>
+          <option value="175">ฝึกแปรงฟันรายบุคคล · นับต่อคน</option>
+        </select></label>
+        <label class="field">วันที่<input id="gDate" type="date"></label>
+        <label class="field">ระยะเวลา (นาที)<input id="gMin" type="number" min="5" max="240" value="30"></label>
+        <label class="field">หัวข้อ<input id="gTopic" type="text" value="ขนมหวานกับฟันผุ"></label>
+      </div>
+      <fieldset class="rooms" id="gRooms"><legend class="small muted">ห้อง</legend></fieldset>
+      <div class="row"><button class="btn" type="button" id="gAll">ทำให้ทุกคน</button><button class="linkbtn" type="button" id="gNone">ล้างรายชื่อ</button><span class="small muted" id="gCount"></span></div>
+      <div class="plist" id="gList" aria-label="ผู้เข้าร่วม"></div>
+      <p class="small muted">หลักฐาน: รูปกิจกรรมและรายชื่อที่ครูประจำชั้นลงนาม เก็บไว้ที่หน่วย (D-62) การแนบไฟล์ในระบบอยู่ในรุ่นถัดไป</p>
+      <div class="preview" id="gPreview" aria-live="polite"></div>
+      <div class="row"><button class="btn btn--primary" type="submit" id="gSave">บันทึกกิจกรรม</button></div>
+    </form>
+  </section>
+
+  <section>
+    <div class="row between"><h3>รายการที่บันทึก</h3><div class="row" id="ledgerActions"></div></div>
+    <div class="filters">
+      <label class="field">เดือนที่ให้บริการ<select id="lMonth"></select></label>
+      <label class="field">สถานะ<select id="lStatus"></select></label>
+      <label class="field">ประเภท<select id="lKind"><option value="all">ทั้งหมด</option><option value="one">รายคน</option><option value="group">กิจกรรมกลุ่ม</option><option value="extra">นอกแผน</option><option value="flag">มีข้อสังเกต</option></select></label>
+      <label class="field">ค้นหารหัสนักเรียน<input id="lQ" type="search" placeholder="เช่น 53-001" autocomplete="off"></label>
+    </div>
+    <div class="tablewrap">
+      <table class="ledger">
+        <thead><tr><th scope="col">วันที่</th><th scope="col">นักเรียน</th><th scope="col">บริการ</th><th scope="col">ซี่</th><th scope="col">แผน</th><th scope="col" class="num">มูลค่าอ้างอิง</th><th scope="col">สถานะ</th><th scope="col">ผู้บันทึก</th><th scope="col"><span class="sr-only">จัดการ</span></th></tr></thead>
+        <tbody id="ledgerBody"></tbody>
+      </table>
+    </div>
+    <div class="row"><button class="btn" type="button" id="ledgerMore">แสดงเพิ่ม</button><span class="small muted" id="ledgerCount"></span></div>
+    <p class="small muted">มูลค่าอ้างอิงใช้ราคาจากการศึกษาต้นทุน ยอดที่จ่ายจริงคำนวณตามอัตราค่าบริการของรูปแบบการจ่ายของหน่วย (fee schedule) โดยทีมวิจัย</p>
+  </section>
+</div>
+
+<!-- =============================================================== RESEARCH -->
+<div id="research" class="screen" role="tabpanel" hidden></div>
+
+</main>
+
+<div class="savebar" id="saveBar" hidden>
+  <div class="wrap row between">
+    <span id="saveMsg">มีการแก้ไขผลตรวจที่ยังไม่บันทึก</span>
+    <span class="row"><button class="linkbtn" type="button" id="discardBtn">ยกเลิกการแก้ไข</button><button class="btn btn--primary" type="button" id="saveExamBtn">บันทึกผลตรวจ</button></span>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="tip-float" id="ftip" role="tooltip" hidden></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

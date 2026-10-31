@@ -1,0 +1,16 @@
+// Offline preview only: open a screen from the URL hash so headless screenshots can reach every screen.
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  for (let i = 0; i < 50 && !document.querySelector('#t-home, #t-research'); i++) await wait(100);
+  const [screen, id, sub] = decodeURIComponent(location.hash.slice(1)).split(':');
+  if (!screen) return;
+  if (screen === 'file' && id) {
+    const sel = document.querySelector('#kidSel');
+    document.querySelector('#t-file').click();
+    if (sub) document.querySelector('#ft-' + sub).click();
+    sel.value = id; sel.dispatchEvent(new Event('change'));
+    if (sub) document.querySelector('#ft-' + sub).click();
+  } else if (screen === 'enrol') document.querySelector('[data-go="enrol"]').click();
+  else { const t = document.querySelector('#t-' + screen); if (t) t.click(); }
+  document.documentElement.dataset.ready = '1';
+})();
