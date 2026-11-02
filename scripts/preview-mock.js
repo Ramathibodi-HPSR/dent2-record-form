@@ -19,6 +19,7 @@ window.supabase = { createClient: () => {
     return api;
   };
   return { from, rpc: async () => ({ data: 'B-01-099', error: null }),
+    storage: { from: () => ({ upload: async () => ({ error: null }), createSignedUrl: async () => ({ data: null, error: { message: 'offline preview' } }) }) },
     auth: { getSession: async () => ({ data: { session: { user: M.me } } }), getUser: async () => ({ data: { user: M.me } }),
       signInWithPassword: async () => ({ error: null }), signOut: async () => ({}) } };
 } };

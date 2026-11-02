@@ -183,12 +183,13 @@ function buildPlan(k) {
     const primNote = prim ? ' · ฟันน้ำนม ไม่นับในงบโครงการ' : '';
     if (n === 2 && fpm) {
       const occ = t.occ ?? t.B;
-      teethRows.push({ ...base, key: `seal-${no}`, code: '171', codes: occ >= 3 ? ['171', '172'] : ['171'], label: 'เคลือบหลุมร่องฟัน', sub: (t.A === 1 || t.A === 7 ? 'เคลือบซ้ำ · ' : '') + (occ >= 1 ? `ICDAS ${occ} ด้านบดเคี้ยว` : 'ฟันกรามแท้ขึ้นแล้ว') + (t.partial ? ' · ขึ้นไม่เต็มซี่' : '') + (occ >= 3 ? ' · หรือ PRR' : '') });
+      // PRR only at ICDAS 3; ICDAS 4 and above are filled (D-52).
+      teethRows.push({ ...base, key: `seal-${no}`, code: '171', codes: occ === 3 ? ['171', '172'] : ['171'], label: 'เคลือบหลุมร่องฟัน', sub: (t.A === 1 || t.A === 7 ? 'เคลือบซ้ำ · ' : '') + (occ >= 1 ? `ICDAS ${occ} ด้านบดเคี้ยว` : 'ฟันกรามแท้ขึ้นแล้ว') + (t.partial ? ' · ขึ้นไม่เต็มซี่' : '') + (occ === 3 ? ' · หรือ PRR' : '') });
     } else if (n === 4) {
-      const code = fpm && t.B <= 4 ? '172' : '55';
-      teethRows.push({ ...base, key: `tx-${no}`, code, codes: ['172', '55', '56', '57', 'SDF'], label: code === '172' ? 'PRR' : 'บูรณะฟัน', sub: `ICDAS ${t.B}` + (code === '55' ? ' · หรือ SDF 38%' : '') + primNote });
+      // One filling code and price, 1 surface (D-69); more than one surface goes to the centre.
+      teethRows.push({ ...base, key: `tx-${no}`, code: '67210', codes: ['67210', '55', '56', '57', 'SDF'], label: 'อุดฟัน', sub: `ICDAS ${t.B ?? '-'}` + (prim ? '' : ' · อุด 1 ด้านบนรถทันตกรรม ถ้าต้องอุดมากกว่า 1 ด้าน ส่งรักษาที่ศูนย์ฯ') + ' · หรือ SDF 38%' + primNote });
     } else if (n === 3) {
-      teethRows.push({ ...base, key: `tx-${no}`, code: 'SDF', codes: ['SDF', '55', '56', '57'], label: 'ทา SDF 38%', sub: `ICDAS ${t.B} · ยังไม่มีราคา` + primNote });
+      teethRows.push({ ...base, key: `tx-${no}`, code: 'SDF', codes: ['SDF', '67210', '55', '56', '57'], label: 'ทา SDF 38%', sub: `ICDAS ${t.B} · ยังไม่มีราคา` + primNote });
     } else if (n === 5) {
       teethRows.push({ ...base, key: `tx-${no}`, code: prim ? '68' : 'REF', codes: ['68', 'REF', '1'], label: prim ? 'รักษาโพรงประสาทฟัน' : 'ส่งต่อ รักษาโพรงประสาทฟัน', sub: `ICDAS ${t.B} · ` + (prim ? 'ทำในหน่วย (pulpotomy) หรือส่งต่อ' : 'เบิกตามระบบปกติ นอกงบโครงการ') + primNote, urgent: true });
     } else if (n === 6) {
@@ -204,14 +205,62 @@ function buildPlan(k) {
   return [...rows, ...teethRows];
 }
 
-/* ================================================================ money: reference values only in v1.0 */
-// Unit price as in v0.7 (no LC for ศบส. and control, 100% LC for private trial arms). Primary teeth are
-// outside the unit budget (D-54). Arm rules, caps and ceilings follow the fee schedules in v1.2.
+/* ================================================================ money: Table 1 value of a service */
+// Table 1 rate of the unit's fee schedule (no LC for ศบส. and control, 100% LC for private trial arms). Primary
+// teeth are outside the unit budget (D-54). What the project actually pays is v_services_pay (payOf).
 function refValue(u, code, tooth) {
   const p = PRICE[code];
   if (!p || p.outside || p.unpriced || isPrimNo(tooth)) return 0;
   return u.arm === 'control' || u.ptype === 'public' ? p.lc : p.full;
 }
+
+/* ================================================================ money by fee schedule (01–03) */
+// Thai fiscal year (Oct–Sep), the NHSO year for "once a year".
+const fyOf = d => d.getFullYear() + (d.getMonth() >= 9 ? 1 : 0);
+const rateOf = (u, code) => (PRICE[code] ? (u.arm === 'control' || u.ptype === 'public' ? PRICE[code].lc : PRICE[code].full) : 0);
+// Round-1 budget of one child (01 §2, 02 §2): the care plan at Table 1 rates (exams, fluoride, brushing kit,
+// sealants); fillings = permanent teeth needing restoration × the 1-surface rate; NHSO's share = 174 and 170 once
+// per fiscal year in which the plan has them, and sealants up to two teeth (the project pays from the third).
+// No NHSO share for a child with no public coverage (D-68). Primary teeth and referrals are not counted (D-54).
+function childBudget(u, k) {
+  let plan = 0, fillN = 0, seal = 0;
+  const fy = { '174': new Set(), '170': new Set() };
+  for (const r of buildPlan(k)) {
+    if (r.study || r.prim) continue;
+    if (r.key === 'exam' || r.key === 'fl') {
+      const code = r.key === 'exam' ? '174' : '170';
+      plan += rateOf(u, code) * r.months.length;
+      r.months.forEach(m => fy[code].add(fyOf(addMonths(k.base, m === 1 ? 0 : m))));
+    } else if (r.key === 'brush') plan += rateOf(u, '176');
+    else if (r.code === '171') { plan += rateOf(u, '171'); seal++; }
+    else if (r.code === '67210') fillN++;
+  }
+  const nhso = k.c.coverage === 'none' ? 0
+    : (PRICE['174'] ? PRICE['174'].nhso : 0) * fy['174'].size + (PRICE['170'] ? PRICE['170'].nhso : 0) * fy['170'].size + Math.min(seal, 2) * rateOf(u, '171');
+  return { plan, fillN, fill: fillN * rateOf(u, '67210'), nhso };
+}
+// Unit totals from the children examined at round 1. Capitation (01) = plan + fillings − NHSO; ceiling (02) =
+// (plan + fillings) × 1.2 − NHSO. Fillings count only when the unit's van can fill (van_fills, set by the team).
+function unitBudget(u) {
+  const t = { n: 0, plan: 0, fill: 0, fillN: 0, nhso: 0, noCov: 0, unknownCov: 0 };
+  for (const k of u.kids) {
+    if (!examined(k)) continue;
+    const b = childBudget(u, k);
+    t.n++; t.plan += b.plan; t.fill += b.fill; t.fillN += b.fillN; t.nhso += b.nhso;
+    if (k.c.coverage === 'none') t.noCov++; else if (!k.c.coverage) t.unknownCov++;
+  }
+  t.fillIn = u.van_fills === true ? t.fill : 0;
+  t.cap = t.plan + t.fillIn - t.nhso;
+  t.ceil = (t.plan + t.fillIn) * 1.2 - t.nhso;
+  t.dataFee = 100 * t.n;   // data-collection fee per round-1 exam, apart from services (D-36, D-50)
+  return t;
+}
+// Claim arms: project amounts of sent, approved and paid services; drafts and returned ones apart.
+function unitClaims(u) {
+  const by = st => u.tx.filter(t => st.includes(t.status)).reduce((a, t) => a + txAmt(u, t), 0);
+  return { claimed: by(['submitted', 'approved', 'paid']), approved: by(['approved']), paid: by(['paid']), draft: by(['draft', 'returned']) };
+}
+const transferred = u => (u.transfers || []).reduce((a, t) => a + +t.amount, 0);
 
 /* ================================================================ per-child plan state */
 const CAT = { '171': 'seal', '172': 'seal', '170': 'fl', '174': 'recall', '173': 'recall', '176': 'brush', '175': 'brush', 'REF': 'ref' };
@@ -278,6 +327,25 @@ async function fetchAll(table, order) {
   }
   return out;
 }
+// What the project pays per service comes from the database view v_services_pay (fee schedules 01–03). It is
+// fetched again after services or coverage change; money screens re-render when it arrives.
+let payVer = -1, payBusy = false;
+function setPay(rows) { S.pay = new Map(rows.map(r => [r.id, { pay: +r.project_pay || 0, note: r.pay_note || '' }])); }
+const payOf = tx => (S.pay && S.pay.get(tx.id)) || null;
+async function refreshPay() {
+  if (payBusy || payVer === S.txVer) return;
+  payBusy = true;
+  const ver = S.txVer;
+  try { setPay(await fetchAll('v_services_pay', ['service_date', 'id'])); payVer = ver; } catch (e) { /* the next render tries again */ }
+  payBusy = false;
+  if (payVer !== ver) return;
+  if (payVer !== S.txVer) refreshPay();
+  else if (['home', 'claims', 'research'].includes(S.tab)) render(S.tab, true);
+}
+// Amount shown per service: what the project pays in the claim arms; in the capitation arm the Table 1 value
+// (cost of the unit's work, no item claims).
+const txAmt = (u, tx) => (u.arm !== 'cap' && payOf(tx) ? payOf(tx).pay : refValue(u, tx.code, tx.tooth));
+const amtLabel = u => (u.arm === 'cap' ? 'มูลค่าตามอัตรา' : 'ยอดเบิกโครงการ');
 function txFrom(s) {
   return { id: s.id, kid: s.study_id, code: s.code, tooth: s.tooth, date: fromInput(s.service_date), status: s.status, fromPlan: s.from_plan,
     planKey: s.plan_key, planMonth: s.plan_month ?? null, by: s.provider || '', outcome: s.outcome, gid: s.group_id, gnote: s.group_note, n: s.n_participants, note: s.note, returnNote: s.return_note };
@@ -302,6 +370,7 @@ function applyExam(k, ex) {
 }
 // No names in the system (D-64): the unit matches study IDs to its own name list.
 function setChild(k, c) {
+  S.txVer = (S.txVer || 0) + 1;   // coverage can change what the project pays
   k.c = c; k.cls = c.class; k.female = c.sex === 'F';
   k.birth = c.birth_ym ? fromInput(c.birth_ym + '-15') : null;
   k.name = '';
@@ -323,31 +392,35 @@ const COV = {
 const covText = c => (COV[c.coverage] ? `${COV[c.coverage].th} · ${COV[c.coverage].rule}` : 'ยังไม่ตรวจสิทธิ');
 const kidLabel = k => [k.cls, sexTh(k)].filter(Boolean).join(' · ');
 function reindex(u) {
+  S.txVer = (S.txVer || 0) + 1;   // services changed: the project amounts are fetched again (refreshPay)
   u.txByKid = {};
   for (const tx of u.tx) if (tx.kid) (u.txByKid[tx.kid] ||= []).push(tx);
 }
 function sortKids(u) { u.kids.sort((a, b) => a.id.localeCompare(b.id)); }
 
 async function loadAll() {
-  const [units, schools, examiners, prices, children, exams, services] = await Promise.all([
+  const [units, schools, examiners, prices, children, exams, services, transfers, pay] = await Promise.all([
     fetchAll('units', ['letter']), fetchAll('schools', ['id']), fetchAll('examiners', ['code']), fetchAll('price_list', ['code', 'valid_from']),
     fetchAll('children', ['study_id']), fetchAll('exams', ['id']), fetchAll('services', ['service_date', 'id']),
+    fetchAll('transfers', ['paid_on', 'id']), fetchAll('v_services_pay', ['service_date', 'id']),
   ]);
   PRICE = {};
   const today = toInput(TODAY);
   for (const p of prices) {
     if (p.valid_from > today || (p.valid_to && p.valid_to <= today)) continue;
-    PRICE[p.code] = { name: p.name, short: p.short, unit: p.unit, lc: +p.price_lc, full: +p.price_full, tooth: p.tooth_rule, group: p.group_kind, unpriced: p.unpriced, outside: p.outside };
+    PRICE[p.code] = { name: p.name, short: p.short, unit: p.unit, lc: +p.price_lc, full: +p.price_full, tooth: p.tooth_rule, group: p.group_kind, unpriced: p.unpriced, outside: p.outside, nhso: +(p.nhso_rate || 0) };
   }
   S.units = {};
-  for (const r of units) S.units[r.id] = { ...r, schools: [], examiners: [], kids: [], byId: {}, tx: [], txByKid: {}, exams: [] };
+  for (const r of units) S.units[r.id] = { ...r, schools: [], examiners: [], kids: [], byId: {}, tx: [], txByKid: {}, exams: [], transfers: [] };
   for (const s of schools) S.units[s.unit_id]?.schools.push(s);
   for (const x of examiners) if (x.active) S.units[x.unit_id]?.examiners.push(x.code);
   const examBy = {};
   for (const e of exams) { if (e.round === 'baseline') examBy[e.study_id] = e; S.units[e.unit_id]?.exams.push(e); }
   for (const c of children) { const u = S.units[c.unit_id]; if (!u) continue; const k = kidFrom(c, examBy[c.study_id]); u.kids.push(k); u.byId[k.id] = k; }
   for (const s of services) S.units[s.unit_id]?.tx.push(txFrom(s));
+  for (const t of transfers) S.units[t.unit_id]?.transfers.push(t);
   Object.values(S.units).forEach(reindex);
+  setPay(pay); payVer = S.txVer;
 }
 
 /* ================================================================ errors and toasts */
@@ -424,11 +497,11 @@ async function afterLogin() {
     ps.classList.toggle('is-missing', !S.prov);
     $('#provBox').hidden = false;
     S.kid = null;   // the file tab waits for a chosen child (R1-19)
-    $('#verTag').textContent = u.is_test ? 'v1.0 · หน่วยทดสอบ' : 'v1.0';
+    $('#verTag').textContent = u.is_test ? 'v1.1 · หน่วยทดสอบ' : 'v1.1';
   } else {
     fill(chip, el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
     $('#provBox').hidden = true;
-    $('#verTag').textContent = 'v1.0';
+    $('#verTag').textContent = 'v1.1';
   }
   $('#acctBox').hidden = false;
   show(S.me.role === 'unit' ? 'home' : 'research');
@@ -448,7 +521,7 @@ async function logout(reason) {
   await sb.auth.signOut();
   Object.assign(S, { me: null, units: {}, acct: null, kid: null, editId: null, prov: '' });
   $('#tabs').hidden = true; $('#acctBox').hidden = true; hideSaveBar();
-  $('#verTag').textContent = 'v1.0';
+  $('#verTag').textContent = 'v1.1';
   show('login');
   if (reason) $('#lgMsg').replaceChildren(el('div', { class: 'hint', text: reason }));
 }
@@ -550,6 +623,7 @@ const EXPORTS = [
   ['v_export_children', 'ผลตรวจรายคน', ['study_id', 'round']],
   ['v_tooth_findings', 'ผลตรวจรายซี่', ['study_id', 'position']],
   ['v_services_priced', 'บริการที่บันทึก', ['service_date', 'id']],
+  ['v_services_pay', 'ยอดเบิกรายบริการ', ['service_date', 'id']],
 ];
 async function exportCsv(view, label, order, btn) {
   btn.disabled = true;
@@ -570,6 +644,87 @@ const tileLink = (label, value, sub, st, go = 'ดูรายชื่อ →')
   onclick: () => { Object.assign(S.kf, { q: '', cls: 'all', risk: 'all', miss: 'all', st }); show('kids'); } },
   el('span', { class: 'tile__label', text: label }), el('span', { class: 'tile__value' }, value), sub ? el('span', { class: 'tiny muted', text: sub }) : null,
   el('span', { class: 'tile__go', text: go }));
+const KIND = { advance: 'ค่าเหมาจ่ายงวดแรก', claims: 'ค่าบริการตามรายการเบิก', withhold: 'เงินที่หักไว้ (ตามตัวชี้วัด)', savings: 'ส่วนแบ่งส่วนที่ประหยัดได้', data_fee: 'ค่าตอบแทนเก็บข้อมูล', other: 'อื่น ๆ' };
+const periodLabel = p => (p && /^\d{4}-\d{2}$/.test(p) ? thMon(fromInput(p + '-01')) : p || '–');
+// Money on the unit's home page (D-42): from the round-1 screening and the fee schedule of the unit's arm.
+function moneySection(u) {
+  const b = unitBudget(u), c = unitClaims(u), got = transferred(u);
+  const tiles = [];
+  if (u.arm === 'cap') {
+    tiles.push(tile('ค่าเหมาจ่ายรายหัวทั้งปี', `${fmt(b.cap)} บาท`, `คำนวณจากผลตรวจครั้งแรก ${b.n} คน`),
+      tile('งวดแรก 70% (ภายใน ธ.ค. 2569)', `${fmt(b.cap * 0.7)} บาท`, `หักไว้ 30% = ${fmt(b.cap * 0.3)} บาท คืนตามตัวชี้วัดหลังตรวจรอบ 12 เดือน`));
+  } else if (u.arm === 'ffs') {
+    tiles.push(tile('เพดานงบประมาณรวม', `${fmt(b.ceil)} บาท`, `คำนวณจากผลตรวจครั้งแรก ${b.n} คน`),
+      tile('เบิกแล้ว', `${fmt(c.claimed)} บาท`, `อนุมัติแล้ว ${fmt(c.approved + c.paid)} บาท · ร่างยังไม่ส่ง ${fmt(c.draft)} บาท`),
+      b.ceil - c.claimed >= 0 ? tile('เหลือในเพดาน', `${fmt(b.ceil - c.claimed)} บาท`, b.ceil > 0 ? `ใช้ไป ${Math.round(c.claimed / b.ceil * 100)}%` : '')
+        : tile('เกินเพดาน', `${fmt(c.claimed - b.ceil)} บาท`, 'ยอดเบิกรวมทั้งปีต้องไม่เกินเพดาน (02 ข้อ 2)'));
+  } else {
+    tiles.push(tile('เบิกแล้ว', `${fmt(c.claimed)} บาท`, `อนุมัติแล้ว ${fmt(c.approved + c.paid)} บาท`), tile('ร่างยังไม่ส่ง', `${fmt(c.draft)} บาท`));
+  }
+  tiles.push(tile('ได้รับโอนแล้ว', `${fmt(got)} บาท`, `${u.transfers.length} รายการ`),
+    tile('ค่าตอบแทนเก็บข้อมูลรอบ 1', `${fmt(b.dataFee)} บาท`, `${b.n} คน × 100 บาท แยกจากค่าบริการ`));
+  const notes = [];
+  if (u.arm !== 'control') {
+    notes.push(`ที่มาของยอด: แผนการดูแลตามอัตราค่าบริการ ${fmt(b.plan)} บาท` + (u.van_fills === true ? ` + อุดฟัน ${b.fillN} ซี่ ${fmt(b.fill)} บาท` : '')
+      + (u.arm === 'ffs' ? ' แล้วบวกส่วนเพิ่ม 20%' : '') + ` − ส่วนที่เบิกจาก สปสช. ${fmt(b.nhso)} บาท`);
+    if (u.van_fills == null && b.fillN) notes.push(`ยังไม่รวมค่าอุดฟัน ${b.fillN} ซี่ (${fmt(b.fill)} บาท) รอทีมวิจัยยืนยันว่ารถทันตกรรมของหน่วยอุดฟันได้`);
+    if (u.van_fills === false) notes.push('รถทันตกรรมของหน่วยอุดฟันไม่ได้ จึงไม่รวมค่าอุดฟัน นักเรียนที่ต้องอุดฟันส่งต่อตามระบบปกติของ สปสช.');
+  }
+  if (b.unknownCov) notes.push(`ยังไม่ระบุสิทธิการรักษา ${b.unknownCov} คน ระบบคิดเหมือนสิทธิ UC`);
+  if (b.noCov) notes.push(`ไม่มีสิทธิรัฐ ${b.noCov} คน โครงการจ่ายเต็มอัตรา ไม่หักส่วนของ สปสช.`);
+  notes.push('ยอดเปลี่ยนตามผลตรวจครั้งแรกที่บันทึก ทีมวิจัยตรวจยอดก่อนโอนทุกครั้ง');
+  return el('section', {}, el('h3', { text: 'เงินของหน่วย' }), el('div', { class: 'tiles' }, ...tiles),
+    el('ul', { class: 'olist small muted' }, ...notes.map(t => el('li', { text: t }))), transfersBlock(u));
+}
+function transfersBlock(u) {
+  const list = [...u.transfers].sort((a, b) => b.paid_on.localeCompare(a.paid_on) || b.id - a.id);
+  const unseen = list.filter(t => !t.seen_at).length;
+  const det = el('details', { class: 'card', id: 'trList' },
+    el('summary', {}, `รายการโอนเงิน (${list.length})`, unseen ? el('span', { class: 'chip chip--warn', style: 'margin-left:8px', text: `ใหม่ ${unseen}` }) : null),
+    list.length ? el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
+      el('thead', {}, el('tr', {}, ...['วันที่โอน', 'รายการ', 'งวด', 'จำนวนเงิน (บาท)', 'สลิป'].map((h, i) => el('th', { scope: 'col', class: i === 3 ? 'num' : '', text: h })))),
+      el('tbody', {}, ...list.map(t => el('tr', {},
+        el('td', { text: thShort(fromInput(t.paid_on)) }),
+        el('td', { class: 'wrapcell' }, KIND[t.kind] || t.kind, t.note ? el('div', { class: 'tiny muted', text: t.note }) : null, t.seen_at ? null : el('div', { class: 'tiny', style: 'color:var(--warn)', text: 'ใหม่' })),
+        el('td', { text: periodLabel(t.period) }), el('td', { class: 'num', text: fmt2(+t.amount) }),
+        el('td', {}, t.slip_path ? el('button', { class: 'linkbtn', type: 'button', text: 'ดูสลิป', onclick: () => openSlip(t.slip_path) }) : '–'))))))
+      : el('p', { class: 'small muted', text: 'ยังไม่มีการโอนเงิน เมื่อทีมวิจัยโอนเงินและแนบสลิป รายการจะขึ้นที่นี่' }));
+  return det;
+}
+// The unit's notice of a new transfer: a banner until someone in the unit opens the list (seen_at).
+function transferBanner(u) {
+  const unseen = u.transfers.filter(t => !t.seen_at);
+  if (!unseen.length || S.me.role !== 'unit') return null;
+  return el('div', { class: 'ok', id: 'trBanner' }, el('b', { text: `ทีมวิจัยโอนเงินใหม่ ${unseen.length} รายการ รวม ${fmt2(unseen.reduce((a, t) => a + +t.amount, 0))} บาท` }), ' ',
+    el('button', { class: 'btn', type: 'button', text: 'ดูและรับทราบ', onclick: async () => {
+      const det = $('#trList'); if (det) { det.open = true; det.scrollIntoView({ block: 'start' }); }
+      const now = new Date().toISOString();
+      const { error } = await sb.from('transfers').update({ seen_at: now }).in('id', unseen.map(t => t.id));
+      if (error) { toastErr(error); return; }
+      unseen.forEach(t => { t.seen_at = now; });
+      setIf('#trBanner', 'hidden', true);
+    } }));
+}
+async function openSlip(path) {
+  const w = window.open('', '_blank');   // opened before the await so pop-up blockers allow it
+  const { data, error } = await sb.storage.from('slips').createSignedUrl(path, 300);
+  if (error || !data) { if (w) w.close(); toastErr(error || { message: 'เปิดสลิปไม่ได้' }); return; }
+  if (w) w.location = data.signedUrl; else window.location.assign(data.signedUrl);
+}
+// Cohort (Percy 2 Nov): until the unit submits it, children enrolled by mistake or for practice can be deleted.
+function cohortSection(u) {
+  const n = u.kids.length, ex = u.kids.filter(examined).length;
+  if (u.cohort_submitted_at) return el('section', {}, el('h3', { text: 'cohort' }),
+    el('p', { class: 'small', text: `ส่ง cohort แล้วเมื่อ ${thDate(new Date(u.cohort_submitted_at))} ลบแฟ้มนักเรียนไม่ได้แล้ว ถ้าต้องแก้ไขติดต่อทีมวิจัย` }));
+  return el('section', {}, el('h3', { text: 'ส่ง cohort (ยืนยันรายชื่อตรวจครั้งแรก)' }),
+    el('p', { class: 'small muted', text: 'ก่อนส่ง cohort ลบแฟ้มนักเรียนที่บันทึกผิดหรือที่ใช้ซ้อมได้ (แฟ้มนักเรียน → ข้อมูลลงทะเบียน → ลบแฟ้มนักเรียนนี้) เมื่อลงทะเบียนและตรวจครั้งแรกครบทุกห้องแล้ว กด "ส่ง cohort" หลังส่งแล้วลบแฟ้มไม่ได้อีก' }),
+    el('button', { class: 'btn', type: 'button', id: 'cohortBtn', text: `ส่ง cohort (ลงทะเบียน ${n} คน · ตรวจแล้ว ${ex} คน)`, onclick: async () => {
+      if (!confirm(`ส่ง cohort ของ ${u.name}?\nลงทะเบียน ${n} คน ตรวจครั้งแรกแล้ว ${ex} คน\nหลังส่งจะลบแฟ้มนักเรียนไม่ได้อีก`)) return;
+      const { data, error } = await sb.rpc('submit_cohort');
+      if (error) { toastErr(error); return; }
+      u.cohort_submitted_at = data; toast('ส่ง cohort แล้ว'); renderHome();
+    } }));
+}
 function needsReferral(k) { return examined(k) && (Object.values(k.urgent).some(Boolean) || POS.some(p => { const n = needOf(p, k); return n != null && n >= 5; })); }
 function renderHome() {
   const u = unit();
@@ -582,6 +737,7 @@ function renderHome() {
   const ref = u.kids.filter(needsReferral).length;
   const schoolNames = u.schools.map(s => s.name).join(', ');
   $('#home').replaceChildren(
+    transferBanner(u) || '',
     el('section', {},
       el('div', { class: 'row between' },
         el('div', { class: 'stack' }, el('p', { class: 'eyebrow', text: `${schoolNames} · ลงทะเบียน ${n} คน` }), el('h1', { class: 'h-unit', text: u.name })),
@@ -597,15 +753,19 @@ function renderHome() {
       el('div', { class: 'row' },
         el('button', { class: 'btn btn--primary', type: 'button', 'data-go': 'enrol', text: '+ ลงทะเบียนนักเรียน' }),
         el('button', { class: 'btn', type: 'button', 'data-go': 'kids', text: 'รายชื่อนักเรียน' }))),
+    moneySection(u),
+    cohortSection(u),
     el('section', {},
       el('h3', { text: 'ดาวน์โหลดข้อมูลของหน่วย' }),
       el('p', { class: 'small muted', text: 'ไฟล์ CSV ใช้รหัสวิจัยแทนชื่อ ไม่มีเลขบัตรประชาชน เปิดใน Excel ได้' }),
       exportButtons()),
     el('section', {},
-      el('h3', { text: 'อยู่ใน v1.0 และรุ่นถัดไป' }),
+      el('h3', { text: 'อยู่ใน v1.1 และรุ่นถัดไป' }),
       el('ul', { class: 'olist' },
-        el('li', { text: 'ตอนนี้ (v1.0): ลงทะเบียน ผลตรวจครั้งแรก แผนการดูแลรายเดือน บันทึกบริการนอกแผน กิจกรรมกลุ่ม ส่งเบิกรายเดือน ดาวน์โหลด CSV' }),
-        el('li', { text: 'รุ่นถัดไป: แนบไฟล์หลักฐาน หน้าเงินตามอัตราค่าบริการ (v1.2) ตรวจรอบ 6 และ 12 เดือน (v1.3)' }))));
+        el('li', { text: 'ตอนนี้ (v1.1): ลงทะเบียน ผลตรวจครั้งแรก แผนการดูแลรายเดือน สมุดผู้ปกครอง บันทึกบริการ กิจกรรมกลุ่ม ส่งเบิกรายเดือน เงินของหน่วยตามอัตราค่าบริการ รายการโอนเงิน ส่ง cohort ดาวน์โหลด CSV' }),
+        el('li', { text: 'รุ่นถัดไป: ตรวจรอบ 6 และ 12 เดือน และตัวชี้วัดคุณภาพ' })),
+      el('p', { class: 'small' }, el('a', { href: 'guide.html', target: '_blank', rel: 'noopener', text: 'คู่มือการใช้งาน' }), ' · ', el('a', { href: 'guide.pdf', target: '_blank', rel: 'noopener', text: 'คู่มือ PDF (พิมพ์ได้)' }))));
+  refreshPay();
 }
 
 /* ================================================================ STUDENTS: cards */
@@ -855,8 +1015,23 @@ function renderFileHead() {
         kv('สิทธิการรักษา', `${covText(k.c)}${k.c.coverage && k.c.uc_method ? ' (' + k.c.uc_method + ')' : ''}${k.c.coverage && k.c.uc_checked_on ? ' ' + thShort(fromInput(k.c.uc_checked_on)) : ''}`),
         kv('ความยินยอม', `${k.c.consent_on ? 'ผู้ปกครองลงนาม ' + thShort(fromInput(k.c.consent_on)) : 'ผู้ปกครองยังไม่ลงนาม'} · ${k.c.assent ? 'เด็กยินยอม' : 'เด็กยังไม่ยินยอม'}`),
         kv('โรคประจำตัว · การแพ้', `${k.c.conditions || 'ไม่มี'} · ${[k.c.allergy_silver ? 'แพ้เงิน (ห้าม SDF)' : '', k.c.allergy_colophony ? 'แพ้โคโลโฟนี' : ''].filter(Boolean).join(', ') || 'ไม่มี'}`)),
-      el('div', { class: 'row', style: 'margin-top:10px' }, el('button', { class: 'btn', type: 'button', text: 'แก้ไขข้อมูลลงทะเบียน', onclick: () => { if (dirtyGuard()) { S.editId = k.id; show('enrol'); } } }))));
+      el('div', { class: 'row', style: 'margin-top:10px' }, el('button', { class: 'btn', type: 'button', text: 'แก้ไขข้อมูลลงทะเบียน', onclick: () => { if (dirtyGuard()) { S.editId = k.id; show('enrol'); } } }),
+        !unit().cohort_submitted_at ? el('button', { class: 'btn btn--danger', type: 'button', id: 'delKidBtn', text: 'ลบแฟ้มนักเรียนนี้', onclick: () => deleteChild(k) }) : null)));
   if (!hasConsent(k)) $('#fileHead details').open = true;
+}
+
+// Deletes a child enrolled by mistake or for practice, with its exams and services, until the cohort is sent.
+async function deleteChild(k) {
+  const u = unit();
+  const ans = prompt(`ลบแฟ้มนักเรียน ${k.id} พร้อมผลตรวจและบริการที่บันทึกไว้ทั้งหมด\nใช้กับข้อมูลที่บันทึกผิดหรือข้อมูลซ้อม ลบแล้วหน่วยกู้คืนเองไม่ได้\nพิมพ์รหัส ${k.id} เพื่อยืนยัน`);
+  if (ans == null) return;
+  if (ans.trim() !== k.id) { toast('รหัสไม่ตรง ยังไม่ได้ลบ'); return; }
+  const { error } = await sb.rpc('delete_child', { p_study_id: k.id });
+  if (error) { toastErr(error); return; }
+  u.kids = u.kids.filter(x => x !== k); delete u.byId[k.id]; u.tx = u.tx.filter(t => t.kid !== k.id); reindex(u);
+  k.dirty = false; k.editing = false; S.kid = null; hideSaveBar();
+  toast(`ลบแฟ้ม ${k.id} แล้ว`);
+  show('kids');
 }
 
 /* ---- exam */
@@ -1185,6 +1360,7 @@ async function toggleCell(k, row, m, tx) {
   } else {
     if (!canServe(k)) { toast('นักเรียนคนนี้ยังไม่มีความยินยอมครบหรือถอนตัวแล้ว บันทึกบริการไม่ได้'); return; }
     if (!needProv()) return;
+    if (PLACE_CODES.includes(row.code)) { goClaim(k, row); return; }
   }
   const cm = monthOf(k.base, TODAY);
   // A late cell is recorded with today's real date; plan_month keeps the month it fulfils (R1-05).
@@ -1206,10 +1382,19 @@ async function toggleCell(k, row, m, tx) {
       if (error) { toastErr(error); return; }
       u.tx.push(txFrom(data)); reindex(u);
       const v = refValue(u, code, row.tooth);
-      toast(`บันทึกแล้ว · ${rowName(row)}${m !== 'any' && m < cm ? ` (ของเดือนที่ ${m})` : ''} · ${thShort(date)}${v ? ` · มูลค่าอ้างอิง ${fmt2(v)} บาท` : ''}`);
+      toast(`บันทึกแล้ว · ${rowName(row)}${m !== 'any' && m < cm ? ` (ของเดือนที่ ${m})` : ''} · ${thShort(date)}${v ? ` · อัตรา ${fmt2(v)} บาท` : ''}`);
     }
   } finally { busy = false; }
   renderFileHead(); renderPlanGrid();
+}
+// Fillings and PRR need the place (only the mobile unit is paid), so a plan tick opens the claims form for them.
+function goClaim(k, row) {
+  show('claims');
+  $('#cKid').value = k.id; $('#cCode').value = row.code; claimPreview();
+  if (row.tooth != null && [...$('#cTooth').options].some(o => o.value === String(row.tooth))) { $('#cTooth').value = String(row.tooth); claimPreview(); }
+  $('#fOne').scrollIntoView({ block: 'start' });
+  if ($('#cPlace')) $('#cPlace').focus();
+  toast(`${rowName(row)}: เลือกว่าทำบนรถทันตกรรมหรือที่ศูนย์บริการ แล้วกด "บันทึกบริการ"`);
 }
 function monthCell(k, row, m, cm, txs) {
   if (row.anytime) { const t = txs.find(x => monthOf(k.base, x.date) === m); return t ? el('span', { class: 'mdone', title: `ทำแล้ว ${thDate(t.date)}`, text: '✓' }) : ''; }
@@ -1307,11 +1492,42 @@ function renderPlanTotals(u, k, rows, cm) {
   }
   const t = (label, value, note) => el('div', { class: 'stack' }, el('span', { class: 'small muted', text: label }), el('span', { class: 'big', text: value }), note ? el('span', { class: 'tiny muted', text: note }) : null);
   $('#planTotals').replaceChildren(
-    t('มูลค่าแผนทั้งปี (ราคาอ้างอิง)', `${fmt(main)} บาท`, `ฟันแท้และบริการรายคน · ไม่รวมตรวจรอบโครงการ${unpriced ? ` · ยังไม่มีราคา ${unpriced} รายการ` : ''} · ยอดจ่ายจริงคิดตามอัตราค่าบริการโดยทีมวิจัย`),
+    t('มูลค่าแผนทั้งปี (ตามอัตราค่าบริการ)', `${fmt(main)} บาท`, `ฟันแท้และบริการรายคน · ไม่รวมตรวจรอบโครงการ${unpriced ? ` · ยังไม่มีราคา ${unpriced} รายการ` : ''} · เงินของหน่วยดูที่หน้าแรก`),
     t('รายการฟันน้ำนม', `${primN} รายการ`, 'บันทึกได้ ไม่นับในงบโครงการ'),
     t('ทำแล้วตามกำหนด', `${done}/${dueN}`, `รายการที่ถึงกำหนดถึงเดือนที่ ${cm}`));
 }
-$('#printBtn').addEventListener('click', () => window.print());
+// Parent booklet (one A4 sheet folded into four A5 pages, booklet.html). The data goes through localStorage
+// and holds no names (D-64); the parent writes the child's name by hand.
+function bookletData(u, k) {
+  const school = u.schools.find(s => s.id === k.c.school_id), lvl = lvlOf(k);
+  const teeth = POS.map(p => {
+    const t = k.teeth[p], n = needOf(p, k);
+    return { pos: p, no: t.t === 'n' ? p : toothNo(p, t), jaw: UPPER.includes(p) ? 'upper' : 'lower', type: t.t, n_code: t.t === 'n' ? t.A : null,
+      A: t.t === 'n' ? null : t.A, B: t.t === 'n' ? null : t.B, active: t.act === 'a' ? true : t.act === 'i' ? false : null,
+      need: n, need_label: n != null ? NEED[n] : '', partial: !!t.partial };
+  });
+  const cnt = f => teeth.filter(f).length;
+  const plan = buildPlan(k).map(r => ({ label: rowName(r), tooth: r.tooth ?? null, category: r.study ? 'study' : catOf(r), months: r.anytime ? [] : r.months, anytime: !!r.anytime, prim: !!r.prim,
+    done: r.study ? [] : rowTx(u, k, r).map(t => ({ month: r.anytime ? null : txMonth(k, t), date: toInput(t.date) })) }));
+  return { v: 1, printed_on: toInput(TODAY),
+    child: { study_id: k.id, school: school ? school.name : '', class: k.cls || '', sex: sexTh(k), age_text: k.birth ? ageText(k, k.base) : '' },
+    unit: { name: u.name.split(' · ')[0] },   // TEST unit names carry the payment arm after " · "; parents never see it
+    exam: { date: toInput(k.base), place: PLACE[k.place] || '', examiner_code: k.examiner || '',
+      risk: { level: lvl, label: LEVEL[lvl].th, score: riskScore(k), recall_months: LEVEL[lvl].recall },
+      urgent: { ...k.urgent }, needs_referral: needsReferral(k), teeth,
+      counts: { decayed_perm: cnt(t => t.type === 'p' && t.B >= 3), decayed_prim: cnt(t => t.type === 'd' && t.B >= 3), filled: cnt(t => [3, 4, 5, 6].includes(t.A)),
+        sealed: cnt(t => [1, 2].includes(t.A)), need_seal: cnt(t => t.need === 2), need_fill: cnt(t => t.need === 4), need_refer: cnt(t => t.need >= 5) } },
+    plan, month_labels: Array.from({ length: 12 }, (_, i) => thMon(addMonths(k.base, i + 1))),
+    homecare: $('#homecare') ? $('#homecare').textContent : '', return_by: toInput(addMonths(k.base, 12)) };
+}
+$('#printBtn').addEventListener('click', () => {
+  const u = unit(), k = curKid();
+  if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
+  if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
+  try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
+  const w = window.open('booklet.html?v=1.1.0', '_blank');
+  if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
+});
 
 /* ---- child's services */
 // For a service about to be entered on the claims page: which plan row and month it fulfils.
@@ -1347,18 +1563,19 @@ async function saveOutcome(tx) {
 }
 function renderKidTx() {
   const u = unit(), k = curKid();
+  setIf('#kAmtHead', 'textContent', amtLabel(u));
   $('#kidAddBtn').hidden = !examined(k) || !canServe(k);
   const tb = $('#kidTxBody'); tb.replaceChildren();
   const list = [...(u.txByKid[k.id] || [])].sort((a, b) => b.date - a.date || b.id - a.id);
   if (!list.length) { tb.append(el('tr', {}, el('td', { colspan: '8', class: 'muted', text: 'ยังไม่มีบริการที่บันทึก' }))); return; }
   for (const tx of list) {
-    const pm = planMatch(k, tx), v = refValue(u, tx.code, tx.tooth);
+    const pm = planMatch(k, tx), v = txAmt(u, tx);
     tb.append(el('tr', {},
       el('td', { text: thShort(tx.date) }), el('td', { class: 'num', text: examined(k) ? String(monthOf(k.base, tx.date)) : '–' }),
       el('td', { class: 'wrapcell' }, pname(tx.code), isPrimNo(tx.tooth) ? el('div', { class: 'tiny muted', text: 'ฟันน้ำนม ไม่นับในงบโครงการ' }) : null),
       el('td', { class: 'mono', text: tx.tooth ? String(tx.tooth) : '–' }),
       el('td', {}, pm ? el('span', { class: 'chip chip--ok', text: pm.anytime ? 'ตามแผน' : `ตามแผน ด.${txMonth(k, tx)}` }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' })),
-      el('td', { class: 'num' + (v ? '' : ' amt-0'), text: fmt2(v) }),
+      el('td', { class: 'num' + (v ? '' : ' amt-0') }, fmt2(v), payNote(u, tx)),
       el('td', {}, statusEl(tx), tx.code === 'REF' ? el('div', { class: 'tiny' }, tx.outcome ? `ผล: ${tx.outcome}` : 'รอผลส่งต่อ ',
         canEdit(tx) ? el('button', { class: 'linkbtn', type: 'button', text: tx.outcome ? 'แก้ผล' : 'บันทึกผล', onclick: () => saveOutcome(tx) }) : null) : null),
       el('td', { text: tx.by || '–' })));
@@ -1385,6 +1602,7 @@ function txFlags(u) {
     }
     if (tx.kid && tx.code === '171' && bump(`171|${tx.kid}|${tx.tooth}`) > 1) notes.push('ซี่นี้เคลือบแล้ว เคลือบซ้ำเมื่อผลตรวจพบว่าหลุดหรือเหลือบางส่วน');
     if (tx.kid && tx.code === '176' && bump(`176|${tx.kid}|${tx.date.getFullYear()}`) > 1) notes.push('ชุดอุปกรณ์ปีละ 1 ครั้ง ฝึกซ้ำใช้รหัส 175');
+    if (tx.kid && tx.code === '67210' && !isPrimNo(tx.tooth) && kc && u.byId[tx.kid].teeth && !fillFlagged(u.byId[tx.kid], tx.tooth)) notes.push('ซี่นี้ผลตรวจครั้งแรกไม่ได้ระบุว่าต้องบูรณะ');
     out.set(tx.id, notes);
   }
   return out;
@@ -1393,7 +1611,9 @@ const statusEl = tx => {
   const s = STATUS[tx.status] || { th: tx.status, c: 'var(--text-muted)' };
   return tx.status === 'returned' ? el('span', { class: 'chip chip--warn', text: s.th }) : el('span', { class: 'st' }, el('i', { style: `background:${s.c}` }), s.th);
 };
-const CODE_GROUPS = [['ตรวจ', ['174', '173']], ['ส่งเสริมและป้องกัน', ['170', '171', '172', '175', '176']], ['รักษา', ['55', '56', '57', 'SDF', '68', '178', '1']], ['ส่งต่อ', ['REF']]];
+const CODE_GROUPS = [['ตรวจ', ['174', '173']], ['ส่งเสริมและป้องกัน', ['170', '171', '172', '175', '176']], ['รักษา', ['67210', 'SDF', '68', '178', '1']], ['ส่งต่อ', ['REF']]];
+// Fillings and PRR are paid only when done on the mobile dental unit (01, 02 §2; D-49, D-59): the unit says where.
+const PLACE_CODES = ['67210', '172'];
 const canEdit = tx => ['draft', 'recorded', 'returned'].includes(tx.status);
 const claimTab = u => (u.arm === 'cap' ? 'บันทึกบริการ' : 'บันทึกและเบิก');
 // keep = rebuilt after a data reload: what the user already picked stays (R1-09).
@@ -1414,6 +1634,8 @@ function setupClaimsForm(keep) {
   if (!prev) { S.gsel = new Set(); $('#gTopic').value = ''; $('#gTopic').placeholder = topicHint($('#gCode').value); }
   beAll($('#claims'));
 }
+// 02 §2: a filling is claimed for a tooth the round-1 screening flagged as needing restoration (need 4).
+const fillFlagged = (k, no) => POS.some(p => k.teeth[p].t !== 'n' && toothNo(p, k.teeth[p]) === no && needOf(p, k) === 4);
 function toothOptions(k, code) {
   const kind = PRICE[code] && PRICE[code].tooth;
   if (!kind) return null;
@@ -1433,8 +1655,9 @@ function claimPreview() {
   const u = unit(), k = u.byId[$('#cKid').value], code = $('#cCode').value;
   const pv = $('#cPreview'); pv.replaceChildren();
   const none = $('#cKid').options.length <= 1;
-  if (!k) { pv.append(el('span', { class: 'muted', text: none ? 'ยังไม่มีนักเรียนที่บันทึกผลตรวจแล้วและมีความยินยอมครบ บันทึกบริการรายคนได้หลังตรวจครั้งแรก' : 'เลือกนักเรียน' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; return; }
-  if (!code) { pv.append(el('span', { class: 'muted', text: 'เลือกบริการ' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; return; }
+  if (!k) { pv.append(el('span', { class: 'muted', text: none ? 'ยังไม่มีนักเรียนที่บันทึกผลตรวจแล้วและมีความยินยอมครบ บันทึกบริการรายคนได้หลังตรวจครั้งแรก' : 'เลือกนักเรียน' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; setIf('#cPlaceWrap', 'hidden', true); return; }
+  if (!code) { pv.append(el('span', { class: 'muted', text: 'เลือกบริการ' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; setIf('#cPlaceWrap', 'hidden', true); return; }
+  setIf('#cPlaceWrap', 'hidden', !PLACE_CODES.includes(code));
   const opts = toothOptions(k, code);
   const tSel = $('#cTooth');
   $('#cToothWrap').hidden = !opts;
@@ -1445,6 +1668,7 @@ function claimPreview() {
   if (!d || dp || d < k.base) { pv.append(el('div', { class: 'hint', text: dp && dp.includes('ค.ศ.') ? dp : `วันที่ต้องอยู่ระหว่างวันตรวจครั้งแรก (${thShort(k.base)}) ถึงวันนี้ (${thShort(TODAY)})` })); $('#cSave').disabled = true; return; }
   if (opts && !opts.length) { pv.append(el('div', { class: 'hint', text: PRICE[code].tooth === 'fpm' ? 'นักเรียนคนนี้ยังไม่มีฟันกรามแท้ซี่ที่หนึ่งที่ขึ้นแล้ว เคลือบหลุมร่องฟันเฉพาะฟันกรามแท้ซี่ที่หนึ่ง' : 'ไม่มีซี่ที่เข้าเงื่อนไขของบริการนี้ในผลตรวจ' })); $('#cSave').disabled = true; return; }
   if (code === 'SDF' && k.c.allergy_silver) { pv.append(el('div', { class: 'alert', text: '⛔ นักเรียนคนนี้แพ้เงิน ห้ามใช้ SDF' })); $('#cSave').disabled = true; return; }
+  if (PLACE_CODES.includes(code) && $('#cPlace') && !$('#cPlace').value) { pv.append(el('div', { class: 'hint', text: 'เลือกว่าทำที่ไหน: บนรถทันตกรรมที่โรงเรียน (โครงการจ่าย) หรือที่ศูนย์บริการ (เบิกกองทุนทันตกรรม สปสช.)' })); $('#cSave').disabled = true; return; }
   $('#cSave').disabled = false;
   const pf = planFor(k, { code, tooth, date: d });
   const v = refValue(u, code, tooth);
@@ -1453,11 +1677,14 @@ function claimPreview() {
     line('แผน', !pf ? 'นอกแผน · บันทึกได้ ติดป้าย "นอกแผน"'
       : pf.late ? `ตามแผน (เลยกำหนด) เดือนที่ ${pf.month}: ${rowName(pf.row)} · ติ๊กช่องเดือนที่ ${pf.month} ให้`
         : `ตรงกับแผน: ${rowName(pf.row)}${pf.month ? ` เดือนที่ ${pf.month}` : ''} · ติ๊กในแผนให้`),
-    line('มูลค่าอ้างอิง', v ? `${fmt2(v)} บาท` : '0 บาท'));
+    line(u.arm === 'cap' ? 'มูลค่าตามอัตรา' : 'อัตราค่าบริการ', v ? `${fmt2(v)} บาท` : '0 บาท'));
+  if (u.arm !== 'cap') pv.append(el('div', { class: 'note', text: 'ยอดที่โครงการจ่ายจริง (หักส่วนที่เบิกจาก สปสช. แล้ว) ขึ้นในรายการด้านล่างหลังบันทึก' }));
   if (isPrimNo(tooth)) pv.append(el('div', { class: 'note', text: 'ฟันน้ำนม: บันทึกเป็นผลงาน ไม่นับในงบโครงการ' }));
+  if (code === '67210' && !isPrimNo(tooth)) pv.append(el('div', { class: 'note', text: 'อุดฟันเบิกได้ซี่ละ 1 ด้าน (360 บาท) ถ้าต้องอุดมากกว่า 1 ด้าน แนะนำส่งรักษาที่ศูนย์บริการ' + (tooth && !fillFlagged(k, tooth) ? ' · ซี่นี้ผลตรวจครั้งแรกไม่ได้ระบุว่าต้องบูรณะ' : '') }));
+  if (PLACE_CODES.includes(code) && $('#cPlace') && $('#cPlace').value === 'clinic') pv.append(el('div', { class: 'note', text: 'ทำที่ศูนย์บริการ: บันทึกเป็นผลงาน โครงการไม่จ่าย เบิกกองทุนทันตกรรม สปสช. ตามปกติ' }));
   if (code === '170' && k.c.allergy_colophony) pv.append(el('div', { class: 'hint', text: 'นักเรียนคนนี้แพ้โคโลโฟนี ระวังฟลูออไรด์วาร์นิช' }));
 }
-['#cKid', '#cCode', '#cTooth', '#cDate'].forEach(s => $(s).addEventListener('change', claimPreview));
+['#cKid', '#cCode', '#cTooth', '#cDate', '#cPlace'].forEach(s => $(s)?.addEventListener('change', claimPreview));
 async function insertServices(rows, onErr = toastErr) {
   const { data, error } = await sb.from('services').insert(rows).select();
   if (error) { onErr(error); return null; }
@@ -1474,9 +1701,11 @@ $('#fOne').addEventListener('submit', async e => {
   const tooth = !$('#cToothWrap').hidden && $('#cTooth').value ? +$('#cTooth').value : null;
   const pf = planFor(k, { code, tooth, date: d });
   $('#cSave').disabled = true;
+  const place = PLACE_CODES.includes(code) && $('#cPlace') ? $('#cPlace').value || null : null;
   const ok = await insertServices([{ unit_id: u.id, study_id: k.id, code, tooth, service_date: toInput(d), plan_key: pf ? pf.row.key : null,
-    plan_month: pf ? pf.month : null, from_plan: false, provider: S.prov, status: u.arm === 'cap' ? 'recorded' : 'draft' }]);
+    plan_month: pf ? pf.month : null, from_plan: false, provider: S.prov, place, status: u.arm === 'cap' ? 'recorded' : 'draft' }]);
   $('#cSave').disabled = false;
+  if (ok) setIf('#cPlace', 'value', '');
   if (ok) { toast(`บันทึกแล้ว · ${k.id} · ${pname(code)}${tooth ? ' ซี่ ' + tooth : ''} · ${pf ? `ติ๊กในแผนให้แล้ว${pf.month ? ` (เดือนที่ ${pf.month}${pf.late ? ' ที่เลยกำหนด' : ''})` : ''}` : 'นอกแผน'}`); renderClaims(); }
 });
 // Per-person activities (176, 175) write a row for each child: only children with complete consent who have
@@ -1503,8 +1732,8 @@ function groupPreview() {
   const line = (label, value) => el('div', { class: 'pl' }, el('span', { class: 'muted', text: label }), el('b', { text: value }));
   if (!n) { pv.append(el('span', { class: 'muted', text: 'กด "ทำให้ทุกคน" แล้วเอารหัสของคนที่ขาดออก หรือเลือกทีละคน' })); return; }
   const had = code === '176' ? [...S.gsel].filter(id => (u.txByKid[id] || []).some(t => t.code === '176' && t.date.getFullYear() === TODAY.getFullYear())).length : 0;
-  if (PRICE[code] && PRICE[code].group === 'session') pv.append(line('จะบันทึก', `1 รายการ (นับต่อครั้ง) · ผู้เข้าร่วม ${n} คน`), line('มูลค่าอ้างอิง', `${fmt2(price)} บาท`));
-  else pv.append(line('จะบันทึก', `${n} รายการ (นับต่อคน) · ผูกกับแฟ้มของแต่ละคน`), line('มูลค่าอ้างอิง', `${fmt2(price)} × ${n} = ${fmt2(price * n)} บาท`));
+  if (PRICE[code] && PRICE[code].group === 'session') pv.append(line('จะบันทึก', `1 รายการ (นับต่อครั้ง) · ผู้เข้าร่วม ${n} คน`), line('อัตราค่าบริการ', `${fmt2(price)} บาท`));
+  else pv.append(line('จะบันทึก', `${n} รายการ (นับต่อคน) · ผูกกับแฟ้มของแต่ละคน`), line('อัตราค่าบริการ', `${fmt2(price)} × ${n} = ${fmt2(price * n)} บาท`));
   if (had) pv.append(el('div', { class: 'note', text: `${had} คนได้ชุดอุปกรณ์แล้วปีนี้ ฝึกซ้ำให้เลือก "ฝึกแปรงฟันรายบุคคล" (175)` }));
   if (code === '176' || code === '175') pv.append(el('div', { class: 'note', text: 'ช่อง "ฝึกแปรงฟัน" ในแผนของทุกคนที่เลือกจะติ๊กให้อัตโนมัติ' }));
 }
@@ -1541,8 +1770,8 @@ function ledgerEntries(u) {
   for (const tx of u.tx) {
     if (tx.gid && tx.kid) {
       if (!groups.has(tx.gid)) { const g = { group: true, gid: tx.gid, date: tx.date, code: tx.code, n: 0, ref: 0, status: tx.status, by: tx.by, note: tx.gnote, txs: [] }; groups.set(tx.gid, g); out.push(g); }
-      const g = groups.get(tx.gid); g.n++; g.ref += refValue(u, tx.code, tx.tooth); g.txs.push(tx);
-    } else out.push({ group: !tx.kid, tx, date: tx.date, code: tx.code, status: tx.status, ref: refValue(u, tx.code, tx.tooth), by: tx.by });
+      const g = groups.get(tx.gid); g.n++; g.ref += txAmt(u, tx); g.txs.push(tx);
+    } else out.push({ group: !tx.kid, tx, date: tx.date, code: tx.code, status: tx.status, ref: txAmt(u, tx), by: tx.by });
   }
   return out.sort((a, b) => b.date - a.date || (b.tx ? b.tx.id : 0) - (a.tx ? a.tx.id : 0));
 }
@@ -1595,13 +1824,14 @@ function renderClaims() {
     : u.arm === 'ffs' ? 'บันทึกบริการแล้วส่งเบิกเดือนละครั้ง ยอดเบิกทั้งหมดนับในเพดานงบรวมของหน่วย'
       : 'บันทึกบริการแล้วส่งเบิกที่ทีมวิจัยเดือนละครั้ง เฉพาะรายการที่โครงการจ่าย รายการอื่นบันทึกเป็นผลงาน';
   const cnt = st => u.tx.filter(t => t.status === st);
-  const sum = list => list.reduce((a, t) => a + refValue(u, t.code, t.tooth), 0);
+  const sum = list => list.reduce((a, t) => a + txAmt(u, t), 0);
+  setIf('#lAmtHead', 'textContent', amtLabel(u));
   if (u.arm === 'cap') {
     const thisMonth = u.tx.filter(t => t.date.getMonth() === TODAY.getMonth() && t.date.getFullYear() === TODAY.getFullYear()).length;
-    $('#clStats').replaceChildren(tile('บริการที่บันทึกทั้งหมด', `${fmt(u.tx.length)} รายการ`), tile('เดือนนี้', `${thisMonth} รายการ`), tile('มูลค่าอ้างอิงสะสม', `${fmt(sum(u.tx))} บาท`, 'ใช้วัดต้นทุนเทียบค่าเหมาจ่าย'));
+    $('#clStats').replaceChildren(tile('บริการที่บันทึกทั้งหมด', `${fmt(u.tx.length)} รายการ`), tile('เดือนนี้', `${thisMonth} รายการ`), tile('มูลค่าตามอัตราสะสม', `${fmt(sum(u.tx))} บาท`, 'ใช้วัดต้นทุนเทียบค่าเหมาจ่าย'));
   } else {
     $('#clStats').replaceChildren(
-      tile('ยังไม่ส่ง', `${cnt('draft').length} รายการ`, `มูลค่าอ้างอิง ${fmt(sum(cnt('draft')))} บาท`),
+      tile('ยังไม่ส่ง', `${cnt('draft').length} รายการ`, `ยอดเบิก ${fmt(sum(cnt('draft')))} บาท`),
       tile('ส่งแล้ว รอตรวจ', `${cnt('submitted').length} รายการ`),
       tile('ส่งกลับแก้ไข', `${cnt('returned').length} รายการ`, cnt('returned').length ? 'ถ้ารายการผิด กด "ลบ" แล้วบันทึกใหม่ ถ้าถูกแล้วกด "ส่งใหม่"' : ''),
       tile('อนุมัติแล้ว · โอนแล้ว', `${cnt('approved').length} · ${cnt('paid').length} รายการ`));
@@ -1618,7 +1848,10 @@ function renderClaims() {
   renderLedger();
   renderGroupList();
   claimPreview();
+  refreshPay();
 }
+// Why the project pays what it pays (NHSO first, outside the list …), under the amount.
+const payNote = (u, tx) => (tx && u.arm !== 'cap' && payOf(tx) && payOf(tx).note ? el('div', { class: 'tiny muted', style: 'white-space:normal', text: payOf(tx).note }) : null);
 function renderLedger() {
   const u = unit(), flags = txFlags(u);
   const q = S.lf.q.trim().toUpperCase();
@@ -1659,7 +1892,7 @@ function renderLedger() {
       x.status === 'returned' ? el('button', { class: 'linkbtn', type: 'button', text: 'ส่งใหม่', onclick: async () => { if (await setStatus(txs, 'submitted', 'ส่งใหม่แล้ว · รอทีมวิจัยตรวจ')) renderClaims(); } }) : null,
       txs.every(canEdit) ? el('button', { class: 'linkbtn', type: 'button', text: 'ลบ', onclick: () => deleteTx(txs, label) }) : null);
     tb.append(el('tr', {}, el('td', { text: thShort(x.date) }), el('td', {}, who), el('td', { class: 'wrapcell' }, svc), el('td', { class: 'mono', text: tooth }), el('td', {}, plan),
-      el('td', { class: 'num' + (x.ref ? '' : ' amt-0'), text: fmt2(x.ref) }), el('td', {}, statusEl(txs[0])), el('td', { text: x.by || '–' }), el('td', {}, act)));
+      el('td', { class: 'num' + (x.ref ? '' : ' amt-0') }, fmt2(x.ref), payNote(u, x.tx)), el('td', {}, statusEl(txs[0])), el('td', { text: x.by || '–' }), el('td', {}, act)));
   }
   if (!rows.length) tb.append(el('tr', {}, el('td', { colspan: '9', class: 'muted', text: u.tx.length ? 'ไม่มีรายการตรงกับตัวกรอง' : 'ยังไม่มีบริการที่บันทึก' })));
   $('#ledgerCount').textContent = `แสดง ${Math.min(rows.length, S.lf.limit)} จาก ${rows.length} รายการ (กิจกรรมกลุ่มรวมเป็นแถวเดียว)`;
@@ -1670,7 +1903,7 @@ $('#lQ').addEventListener('input', e => { S.lf.q = e.target.value; S.lf.limit = 
 $('#ledgerMore').addEventListener('click', () => { S.lf.limit += 40; renderLedger(); });
 
 /* ================================================================ RESEARCH: all units */
-// Claims review: approve or return submitted services, record transfers. Payable amounts by fee schedule come in v1.2.
+// Claims review: approve or return submitted services. Amounts are what the project pays (v_services_pay).
 function reviewSection(ids) {
   if (S.me.role !== 'research') return null;
   // The same notes units see (duplicates, outside the budget), computed once per unit (R1-15).
@@ -1690,7 +1923,7 @@ function reviewSection(ids) {
   for (const x of sub.slice(0, 200)) tb.append(el('tr', {},
     el('td', { text: thShort(x.tx.date) }), el('td', { class: 'mono', text: x.u.letter }), el('td', { class: 'mono', text: x.tx.kid || 'กลุ่ม' }),
     el('td', { class: 'wrapcell' }, pname(x.tx.code), ...notesOf(x).map(n => el('div', { class: 'tiny', style: 'color:var(--warn)', text: n }))), el('td', { class: 'mono', text: x.tx.tooth ? String(x.tx.tooth) : '–' }),
-    el('td', { class: 'num', text: fmt2(refValue(x.u, x.tx.code, x.tx.tooth)) }),
+    el('td', { class: 'num' }, fmt2(txAmt(x.u, x.tx)), payNote(x.u, x.tx)),
     el('td', {}, el('span', { class: 'row', style: 'gap:6px' },
       el('button', { class: 'linkbtn', type: 'button', text: 'อนุมัติ', onclick: () => act([x], 'approved', 'อนุมัติแล้ว 1 รายการ') }),
       el('button', { class: 'linkbtn', type: 'button', text: 'ส่งกลับ', onclick: () => { const r = prompt('เหตุผลที่ส่งกลับ (หน่วยบริการเห็นข้อความนี้)'); if (r) act([x], 'returned', 'ส่งกลับแล้ว 1 รายการ', { return_note: r }); } })))));
@@ -1698,12 +1931,101 @@ function reviewSection(ids) {
     el('h2', { text: 'ตรวจรายการเบิก' }),
     el('div', { class: 'row' },
       el('button', { class: 'btn btn--primary', type: 'button', disabled: sub.length ? null : true, text: `อนุมัติทั้งหมดที่รอตรวจ (${sub.length})`, onclick: () => { if (confirm(`อนุมัติ ${sub.length} รายการ${nFlag ? ` (มีข้อสังเกต ${nFlag} รายการ)` : ''} ใช่หรือไม่`)) act(sub, 'approved', `อนุมัติแล้ว ${sub.length} รายการ`); } }),
-      el('button', { class: 'btn', type: 'button', disabled: appr.length ? null : true, text: `บันทึกว่าโอนแล้ว (${appr.length})`, onclick: () => { if (confirm(`บันทึกว่าโอนเงินแล้ว ${appr.length} รายการ?`)) act(appr, 'paid', `บันทึกการโอนแล้ว ${appr.length} รายการ`); } })),
+      appr.length ? el('span', { class: 'small muted', text: `อนุมัติแล้ว รอโอน ${appr.length} รายการ ${fmt2(appr.reduce((a, x) => a + txAmt(x.u, x.tx), 0))} บาท · บันทึกการโอนที่ "บันทึกการโอนเงิน" ด้านล่าง` }) : null),
     nFlag ? el('p', { class: 'small', style: 'color:var(--warn)', text: `มีข้อสังเกต ${nFlag} รายการ (ดูใต้ชื่อบริการ) ตรวจก่อนอนุมัติทั้งหมด` }) : null,
     sub.length ? el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
-      el('thead', {}, el('tr', {}, ...['วันที่', 'หน่วย', 'นักเรียน', 'บริการ', 'ซี่', 'มูลค่าอ้างอิง', ''].map((h, i) => el('th', { scope: 'col', class: i === 5 ? 'num' : '', text: h })))), tb))
+      el('thead', {}, el('tr', {}, ...['วันที่', 'หน่วย', 'นักเรียน', 'บริการ', 'ซี่', 'ยอดจ่าย', ''].map((h, i) => el('th', { scope: 'col', class: i === 5 ? 'num' : '', text: h })))), tb))
       : el('p', { class: 'small muted', text: 'ไม่มีรายการรอตรวจ' }),
-    el('p', { class: 'small muted', text: 'ยอดที่จ่ายจริงคิดตามอัตราค่าบริการของแต่ละรูปแบบการจ่าย (fee schedule) ในรุ่น v1.2 ตอนนี้แสดงมูลค่าอ้างอิง' }));
+    el('p', { class: 'small muted', text: 'ยอดจ่ายคิดตามอัตราค่าบริการ 01–03: บริการที่ สปสช. จ่ายก่อน (ตรวจ 174 ฟลูออไรด์ 170 ปีงบละครั้ง เคลือบหลุมร่องฟัน 2 ซี่แรก) โครงการจ่ายส่วนต่าง เด็กไม่มีสิทธิรัฐจ่ายเต็มอัตรา อุดฟันและ PRR จ่ายเฉพาะบนรถทันตกรรม ฟันน้ำนมไม่นับ' }));
+}
+// Money per unit, cohort status and the van-filling setting, for the research team.
+function moneyTable(ids) {
+  const tb = el('tbody');
+  for (const id of ids) {
+    const u = S.units[id], b = unitBudget(u), c = unitClaims(u);
+    tb.append(el('tr', {},
+      el('th', { scope: 'row' }, u.name, el('div', { class: 'tiny muted mono', text: `${u.letter}${u.is_test ? ' · ทดสอบ' : ''}` })),
+      el('td', { class: 'num', text: String(b.n) }),
+      el('td', { class: 'num' }, u.arm === 'cap' ? `${fmt(b.cap)}` : u.arm === 'ffs' ? `${fmt(b.ceil)}` : '–', el('div', { class: 'tiny muted', text: u.arm === 'cap' ? 'เหมาจ่าย' : u.arm === 'ffs' ? 'เพดาน' : 'ไม่มีเพดาน' })),
+      el('td', { class: 'num', text: u.arm === 'cap' ? '–' : fmt(c.claimed) }), el('td', { class: 'num', text: u.arm === 'cap' ? '–' : fmt(c.approved) }),
+      el('td', { class: 'num', text: fmt(transferred(u)) }), el('td', { class: 'num', text: fmt(b.dataFee) }),
+      el('td', { text: u.van_fills === true ? 'ได้' : u.van_fills === false ? 'ไม่ได้' : 'ยังไม่ทราบ' }),
+      el('td', {}, u.cohort_submitted_at ? el('span', {}, thShort(new Date(u.cohort_submitted_at)), ' ',
+        el('button', { class: 'linkbtn', type: 'button', text: 'เปิดใหม่', onclick: async () => {
+          if (!confirm(`เปิด cohort ของ ${u.name} ใหม่? หน่วยจะลบแฟ้มนักเรียนได้อีกจนกว่าจะส่งใหม่`)) return;
+          const { error } = await sb.rpc('reopen_cohort', { p_unit: u.id });
+          if (error) { toastErr(error); return; }
+          u.cohort_submitted_at = null; toast('เปิด cohort ใหม่แล้ว'); renderResearch();
+        } })) : el('span', { class: 'muted', text: 'ยังไม่ส่ง' }))));
+  }
+  return el('section', {}, el('h2', { text: 'เงินแต่ละหน่วย' }),
+    el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
+      el('thead', {}, el('tr', {}, ...['หน่วย', 'ตรวจครั้งแรก', 'เหมาจ่าย / เพดาน', 'เบิกแล้ว', 'อนุมัติ รอโอน', 'โอนแล้ว', 'ค่าเก็บข้อมูลรอบ 1', 'รถอุดฟันได้', 'cohort'].map((h, i) => el('th', { scope: 'col', class: i >= 1 && i <= 6 ? 'num' : '', text: h })))), tb)),
+    el('p', { class: 'small muted', text: 'คำนวณจากผลตรวจครั้งแรก: เหมาจ่าย = แผนการดูแลตามอัตรา + อุดฟัน (ถ้ารถอุดฟันได้) − ส่วนที่เบิกจาก สปสช. · เพดาน = (แผน + อุดฟัน) × 1.2 − ส่วนที่เบิกจาก สปสช. · "รถอุดฟันได้" ตั้งค่าโดยทีมวิจัย' }));
+}
+// The research team records a transfer with its slip; a claims transfer also marks that unit's approved services paid.
+// The unit sees it on its home page as a new transfer (Percy 2 Nov).
+function transferForm(ids) {
+  if (S.me.role !== 'research') return null;
+  const f = el('form', { class: 'card stack', id: 'fTransfer', novalidate: true });
+  const uSel = el('select', { id: 'tUnit' }, ...ids.map(id => el('option', { value: id, text: `${S.units[id].name} (${S.units[id].letter})` })));
+  const kSel = el('select', { id: 'tKind' }, ...Object.entries(KIND).map(([v, t]) => el('option', { value: v, text: t })));
+  const amt = el('input', { id: 'tAmt', type: 'number', min: '0.01', step: '0.01', inputmode: 'decimal' });
+  const date = el('input', { id: 'tDate', type: 'date', value: toInput(TODAY), max: toInput(TODAY) });
+  const period = el('input', { id: 'tPeriod', type: 'month', placeholder: 'เช่น 2026-11' });
+  const note = el('input', { id: 'tNote', type: 'text', autocomplete: 'off' });
+  const slip = el('input', { id: 'tSlip', type: 'file', accept: 'image/jpeg,image/png,image/webp,application/pdf' });
+  const mark = el('input', { id: 'tMark', type: 'checkbox', checked: true });
+  const info = el('div', { class: 'preview', id: 'tInfo', 'aria-live': 'polite' });
+  const approvedOf = u => u.tx.filter(t => t.status === 'approved');
+  const suggest = () => {
+    const u = S.units[uSel.value], b = unitBudget(u), ap = approvedOf(u), apSum = ap.reduce((a, t) => a + txAmt(u, t), 0);
+    const lines = { claims: `อนุมัติแล้ว รอโอน ${ap.length} รายการ ${fmt2(apSum)} บาท`, advance: u.arm === 'cap' ? `งวดแรก 70% ของค่าเหมาจ่าย ${fmt2(b.cap * 0.7)} บาท` : 'ใช้กับหน่วยเหมาจ่ายรายหัว',
+      data_fee: `ค่าเก็บข้อมูลรอบ 1: ${b.n} คน × 100 = ${fmt2(b.dataFee)} บาท` };
+    fill(info, el('span', { class: 'small', text: lines[kSel.value] || 'ใส่จำนวนเงินตามสลิป' }));
+    $('#tMarkWrap').hidden = kSel.value !== 'claims';
+    $('#tMarkText').textContent = ` เปลี่ยนรายการที่อนุมัติแล้วของหน่วยนี้ ${ap.length} รายการ (${fmt2(apSum)} บาท) เป็น "โอนแล้ว"`;
+  };
+  [uSel, kSel].forEach(x => x.addEventListener('change', suggest));
+  f.append(el('h3', { text: 'บันทึกการโอนเงิน' }),
+    el('p', { class: 'small muted', text: 'บันทึกหลังโอนเงินจริง แนบสลิป (รูปหรือ PDF ไม่เกิน 5 MB) หน่วยบริการจะเห็นรายการและสลิปที่หน้าแรกพร้อมข้อความแจ้ง' }),
+    el('div', { class: 'g2f' },
+      el('label', { class: 'field' }, 'หน่วยบริการ', uSel), el('label', { class: 'field' }, 'รายการ', kSel),
+      el('label', { class: 'field' }, 'จำนวนเงิน (บาท)', amt), el('label', { class: 'field' }, 'วันที่โอน', date),
+      el('label', { class: 'field' }, 'งวด (เดือนของรายการเบิก)', period), el('label', { class: 'field' }, 'หมายเหตุ', note),
+      el('label', { class: 'field' }, 'สลิปโอนเงิน', slip)),
+    el('label', { class: 'chk', id: 'tMarkWrap' }, mark, el('span', { id: 'tMarkText' })),
+    info, el('div', { class: 'row' }, el('button', { class: 'btn btn--primary', type: 'submit', id: 'tSave', text: 'บันทึกการโอนเงิน' })));
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const u = S.units[uSel.value], amount = +amt.value, file = slip.files && slip.files[0];
+    const bad = t => fill(info, el('div', { class: 'err', text: t }));
+    if (!(amount > 0)) return bad('ใส่จำนวนเงิน');
+    const dp = dateProblem(date.value, 'วันที่โอน'); if (dp || !date.value) return bad(dp || 'ใส่วันที่โอน');
+    if (file && file.size > 5 * 1024 * 1024) return bad('ไฟล์สลิปใหญ่เกิน 5 MB');
+    const ids2 = kSel.value === 'claims' && mark.checked ? approvedOf(u).map(t => t.id) : [];
+    if (!confirm(`บันทึกการโอน ${fmt2(amount)} บาท ให้ ${u.name}${ids2.length ? ` และเปลี่ยน ${ids2.length} รายการเป็นโอนแล้ว` : ''}?${file ? '' : '\nยังไม่ได้แนบสลิป'}`)) return;
+    $('#tSave').disabled = true;
+    try {
+      let path = null;
+      if (file) {
+        const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+        path = `${u.id}/${toInput(fromInput(date.value))}-${crypto.randomUUID()}.${ext}`;
+        const up = await sb.storage.from('slips').upload(path, file, { contentType: file.type });
+        if (up.error) throw up.error;
+      }
+      const row = { unit_id: u.id, kind: kSel.value, amount, paid_on: date.value, period: period.value || null, note: note.value.trim() || null, slip_path: path };
+      const { data, error } = await sb.rpc('record_transfer', { p_transfer: row, p_service_ids: ids2 });
+      if (error) throw error;
+      u.transfers.push({ id: data, ...row, seen_at: null });
+      const paid = new Set(ids2); u.tx.forEach(t => { if (paid.has(t.id)) t.status = 'paid'; });
+      toast(`บันทึกการโอนแล้ว ${fmt2(amount)} บาท · ${u.name} จะเห็นที่หน้าแรก`);
+      renderResearch();
+    } catch (err) { toastErr(err); }
+    $('#tSave').disabled = false;
+  });
+  setTimeout(suggest, 0);
+  return el('section', {}, f);
 }
 function renderResearch() {
   const tb = el('tbody');
@@ -1727,11 +2049,14 @@ function renderResearch() {
       el('p', { class: 'small muted', text: `${loadedText()} · ทีมวิจัยเห็นรหัสวิจัย ไม่เห็นชื่อหรือเลขบัตรประชาชน (D-18)` }),
       el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
         el('thead', {}, el('tr', {}, ...['หน่วย', 'รูปแบบการจ่าย', 'ลงทะเบียน', 'ยินยอมครบ', 'ตรวจแล้ว', 'ขาดวันตรวจ', 'เสี่ยง สูงมาก · สูง · ต่ำ', 'ต้องส่งต่อ'].map((h, i) => el('th', { scope: 'col', class: i >= 2 ? 'num' : '', text: h })))), tb))),
+    moneyTable(ids),
     reviewSection(ids),
+    transferForm(ids),
     el('section', {},
       el('h2', { text: 'ดาวน์โหลดชุดข้อมูลวิจัย (CSV)' }),
       el('p', { class: 'small muted', text: 'ทุกหน่วยรวมกัน ใช้รหัสวิจัย ไม่มีชื่อ เลขบัตรประชาชน หรือวันเกิด (มีอายุเป็นเดือน ณ วันตรวจ)' }),
       exportButtons()));
+  refreshPay();
 }
 
 /* ================================================================ boot */

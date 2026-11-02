@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=1.0.2">
-<link rel="stylesheet" href="app.css?v=1.0.2">
+<link rel="stylesheet" href="style.css?v=1.1.0">
+<link rel="stylesheet" href="app.css?v=1.1.0">
 </head>
 <body>
 <header class="topbar">
@@ -22,7 +22,7 @@
       <button class="btn btn--ghost" type="button" id="logoutBtn">ออกจากระบบ</button>
     </span>
     <a class="btn btn--ghost guide-link" href="guide.html" target="_blank" rel="noopener">คู่มือ</a>
-    <span class="draft" id="verTag">v1.0</span>
+    <span class="draft" id="verTag">v1.1</span>
   </div>
   <nav class="wrap tabs" id="tabs" role="tablist" aria-label="หน้าจอ" hidden></nav>
 </header>
@@ -218,7 +218,7 @@
     <section>
       <div class="row between">
         <div class="stack"><h3 id="planTitle">แผนการดูแล</h3><p class="small muted" id="planSub"></p></div>
-        <button class="btn noprint" type="button" id="printBtn">พิมพ์แผนให้ผู้ปกครอง</button>
+        <button class="btn noprint" type="button" id="printBtn">พิมพ์สมุดให้ผู้ปกครอง (A5)</button>
       </div>
       <div class="legend noprint">
         <span><i class="lsw"></i>ตามแผน ยังไม่ทำ</span>
@@ -248,7 +248,7 @@
       <div class="row between"><h3>บริการที่บันทึกของนักเรียนคนนี้</h3><button class="btn" type="button" id="kidAddBtn">+ บันทึกบริการให้นักเรียนคนนี้</button></div>
       <div class="tablewrap">
         <table class="ledger">
-          <thead><tr><th scope="col">วันที่</th><th scope="col" class="num">เดือนที่</th><th scope="col">บริการ</th><th scope="col">ซี่</th><th scope="col">แผน</th><th scope="col" class="num">มูลค่าอ้างอิง</th><th scope="col">สถานะ</th><th scope="col">ผู้บันทึก</th></tr></thead>
+          <thead><tr><th scope="col">วันที่</th><th scope="col" class="num">เดือนที่</th><th scope="col">บริการ</th><th scope="col">ซี่</th><th scope="col">แผน</th><th scope="col" class="num" id="kAmtHead">มูลค่า</th><th scope="col">สถานะ</th><th scope="col">ผู้บันทึก</th></tr></thead>
           <tbody id="kidTxBody"></tbody>
         </table>
       </div>
@@ -273,6 +273,7 @@
         <label class="field">วันที่ให้บริการ<input id="cDate" type="date"></label>
         <label class="field">บริการ<select id="cCode"></select></label>
         <label class="field" id="cToothWrap">ซี่<select id="cTooth"></select></label>
+        <label class="field" id="cPlaceWrap" hidden>ทำที่<select id="cPlace"><option value="">– เลือก –</option><option value="van">บนรถทันตกรรมที่โรงเรียน</option><option value="clinic">ที่ศูนย์บริการ (เบิก สปสช.)</option></select></label>
       </div>
       <div class="preview" id="cPreview" aria-live="polite"></div>
       <div class="row"><button class="btn btn--primary" type="submit" id="cSave">บันทึกบริการ</button></div>
@@ -310,12 +311,12 @@
     </div>
     <div class="tablewrap">
       <table class="ledger">
-        <thead><tr><th scope="col">วันที่</th><th scope="col">นักเรียน</th><th scope="col">บริการ</th><th scope="col">ซี่</th><th scope="col">แผน</th><th scope="col" class="num">มูลค่าอ้างอิง</th><th scope="col">สถานะ</th><th scope="col">ผู้บันทึก</th><th scope="col"><span class="sr-only">จัดการ</span></th></tr></thead>
+        <thead><tr><th scope="col">วันที่</th><th scope="col">นักเรียน</th><th scope="col">บริการ</th><th scope="col">ซี่</th><th scope="col">แผน</th><th scope="col" class="num" id="lAmtHead">มูลค่า</th><th scope="col">สถานะ</th><th scope="col">ผู้บันทึก</th><th scope="col"><span class="sr-only">จัดการ</span></th></tr></thead>
         <tbody id="ledgerBody"></tbody>
       </table>
     </div>
     <div class="row"><button class="btn" type="button" id="ledgerMore">แสดงเพิ่ม</button><span class="small muted" id="ledgerCount"></span></div>
-    <p class="small muted">มูลค่าอ้างอิงใช้ราคาจากการศึกษาต้นทุน ยอดที่จ่ายจริงคำนวณตามอัตราค่าบริการของรูปแบบการจ่ายของหน่วยโดยทีมวิจัย</p>
+    <p class="small muted">ยอดเบิกโครงการคิดตามอัตราค่าบริการ (fee schedule) ของหน่วย หักส่วนที่เบิกจาก สปสช. แล้ว ทีมวิจัยตรวจก่อนอนุมัติ หน่วยเหมาจ่ายรายหัวแสดงมูลค่าตามอัตรา ใช้วัดต้นทุนเทียบค่าเหมาจ่าย</p>
   </section>
 </div>
 
@@ -334,7 +335,7 @@
 <div class="tip-float" id="ftip" role="tooltip" hidden></div>
 
 <script src="vendor/supabase.js"></script>
-<script src="config.js?v=1.0.2"></script>
-<script src="app.js?v=1.0.2"></script>
+<script src="config.js?v=1.1.0"></script>
+<script src="app.js?v=1.1.0"></script>
 </body>
 </html>

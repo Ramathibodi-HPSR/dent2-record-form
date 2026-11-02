@@ -110,3 +110,9 @@ tr.is-missing td { box-shadow: inset 0 0 0 2px var(--warn); }
 #enDone:empty { display: none; }
 /* R2-07: the parents' printout leaves out the paid data-collection row (the progress figure is .noprint) */
 @media print { .is-study-row { display: none; } }
+
+/* v1.1: delete a child before the cohort is sent; transfer notice */
+.btn--danger { border-color: var(--crit); color: var(--crit); }
+.btn--danger:hover { background: rgba(230, 103, 103, .12); }
+#trBanner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+#trList summary { cursor: pointer; font-weight: 500; }

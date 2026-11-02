@@ -1,5 +1,6 @@
 // API test of the record form against the TEST project: logins, row-level security, enrolment without personal
-// data (D-64), health coverage (D-68), exams, services and the claims cycle (D-65), views, audit.
+// data (D-64), health coverage (D-68), exams, services and the claims cycle (D-65), what the project pays by fee
+// schedule (v1.1), cohort and deleting a child, transfers with slips, views, audit.
 // Run: NODE_PATH=<dir with @supabase/supabase-js> node scripts/test-rls.cjs
 // Uses the test accounts in scripts/test-accounts.local.json (never real staff). Leaves its test children in place.
 const fs = require('fs');
@@ -87,7 +88,7 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   ok(!s1.error && !s2.error, 'services saved (plan tick and out-of-plan)');
   const pr = await B.from('v_services_priced').select('code,unit_price,primary_tooth').in('id', [s1.data.id, s2.data.id]);
   const p171 = pr.data.find(r => r.code === '171'), p55 = pr.data.find(r => r.code === '55');
-  ok(+p171.unit_price === 242.22 && +p55.unit_price === 0 && p55.primary_tooth, 'priced view: sealant 242.22, primary-tooth filling 0 (D-54)');
+  ok(+p171.unit_price === 242 && +p55.unit_price === 0 && p55.primary_tooth, 'priced view: sealant 242 (fee schedule Table 1), primary-tooth filling 0 (D-54)');
   const sN = await B.from('services').insert({ unit_id: 'public-cap', study_id: kidN, code: '170', service_date: '2026-10-31', status: 'recorded' }).select().single();
   const pc = await B.from('v_services_priced').select('id,coverage,nhso_first').in('id', [s1.data.id, sN.data && sN.data.id].filter(Boolean));
   const pc1 = pc.data && pc.data.find(r => r.id === s1.data.id), pcN = pc.data && sN.data && pc.data.find(r => r.id === sN.data.id);
@@ -134,6 +135,81 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const re = await C.from('services').update({ status: 'submitted' }).eq('id', ids[1]).select();
   ok(!re.error && re.data.length === 1, 'unit resubmits the returned claim');
 
-  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}`);
+  // ---------------------------------------------------------------- v1.1: what the project pays (fee schedules 01–03)
+  const pay = async (c, ids) => Object.fromEntries(((await c.from('v_services_pay').select('id,project_pay,pay_note').in('id', ids)).data || []).map(r => [r.id, +r.project_pay]));
+  const svc = (unit_id, study_id, code, service_date, extra = {}) => ({ unit_id, study_id, code, service_date, status: 'draft', ...extra });
+  console.log('fee schedule 02 (shared savings, C)');
+  const kcN = (await C.rpc('enrol_child', { p_child: { school_id: 'C-01', ...consented, coverage: 'none' } })).data;
+  const p2 = await C.from('services').insert([
+    svc('public-ffs', kc.data, '174', '2026-10-30'), svc('public-ffs', kc.data, '170', '2026-10-30'), svc('public-ffs', kc.data, '170', '2026-11-01'),
+    svc('public-ffs', kc.data, '170', '2026-11-02'), svc('public-ffs', kc.data, '171', '2026-11-01', { tooth: 16 }), svc('public-ffs', kc.data, '171', '2026-11-01', { tooth: 26 }),
+    svc('public-ffs', kc.data, '171', '2026-11-01', { tooth: 36 }), svc('public-ffs', kc.data, '67210', '2026-11-01', { tooth: 46, place: 'van' }),
+    svc('public-ffs', kc.data, '67210', '2026-11-02', { tooth: 36, place: 'clinic' }), svc('public-ffs', kc.data, '67210', '2026-11-02', { tooth: 54, place: 'van' }),
+    svc('public-ffs', kc.data, '172', '2026-11-02', { tooth: 26, place: 'van' }), svc('public-ffs', kcN, '174', '2026-11-01'), svc('public-ffs', kcN, '171', '2026-11-01', { tooth: 16 }),
+  ]).select('id');
+  ok(!p2.error, 'services saved with place (van / clinic)', p2.error && p2.error.message);
+  const i2 = (p2.data || []).map(r => r.id), q2 = await pay(C, i2), v2 = i2.map(id => q2[id]);
+  ok(JSON.stringify(v2) === JSON.stringify([43, 156, 256, 0, 0, 0, 242, 360, 0, 0, 324, 143, 242]),
+    'UC: 174 = 143−100, fluoride 256−100 then 256, twice in a month 0, sealants from the 3rd tooth, van filling 360, clinic 0, primary 0, PRR 324; no coverage: full rate', JSON.stringify(v2));
+
+  console.log('fee schedule 03 (control, A)');
+  const A = await login('public-control');
+  const kaU = (await A.rpc('enrol_child', { p_child: { school_id: 'A-01', ...consented } })).data;
+  const kaN = (await A.rpc('enrol_child', { p_child: { school_id: 'A-01', ...consented, coverage: 'none' } })).data;
+  const p3 = await A.from('services').insert([
+    svc('public-control', kaU, '174', '2026-10-30'), svc('public-control', kaU, '174', '2026-11-01'), svc('public-control', kaU, '170', '2026-11-01'),
+    svc('public-control', kaU, '171', '2026-11-01', { tooth: 16 }), svc('public-control', kaU, '171', '2026-11-01', { tooth: 26 }), svc('public-control', kaU, '171', '2026-11-01', { tooth: 36 }),
+    svc('public-control', kaU, '67210', '2026-11-01', { tooth: 46, place: 'van' }), svc('public-control', kaU, '176', '2026-11-01'),
+    svc('public-control', kaN, '174', '2026-11-01'), svc('public-control', kaN, '67210', '2026-11-01', { tooth: 46, place: 'van' }),
+  ]).select('id');
+  const i3 = (p3.data || []).map(r => r.id), q3 = await pay(A, i3), v3 = i3.map(id => q3[id]);
+  ok(JSON.stringify(v3) === JSON.stringify([43, 0, 156, 0, 0, 242, 0, 0, 143, 360]),
+    'control: top-up of 174/170 once a year, sealants from the 3rd tooth, no treatment for UC, brushing 0; no coverage: 174 in full and the van filling', JSON.stringify(v3));
+  const capPay = await pay(B, [s1.data.id]);
+  ok(capPay[s1.data.id] === 0, 'capitation: no item payments');
+
+  console.log('cohort and deleting a child');
+  const kd = (await C.rpc('enrol_child', { p_child: { school_id: 'C-01', ...consented } })).data;
+  const dB = await B.rpc('delete_child', { p_study_id: kd });
+  ok(!!dB.error, "another unit cannot delete C's child");
+  const dR = await RS.rpc('delete_child', { p_study_id: kd });
+  ok(!!dR.error, 'the research team cannot delete a child');
+  const sc = await C.rpc('submit_cohort');
+  ok(!sc.error && sc.data, 'unit submits its cohort', sc.error && sc.error.message);
+  const dLocked = await C.rpc('delete_child', { p_study_id: kd });
+  ok(!!dLocked.error && /cohort/.test(dLocked.error.message), 'after the cohort, deleting is refused', dLocked.error && dLocked.error.message);
+  const ro = await RS.rpc('reopen_cohort', { p_unit: 'public-ffs' });
+  const roU = await C.rpc('reopen_cohort', { p_unit: 'public-ffs' });
+  ok(!ro.error && !!roU.error, 'research reopens the cohort; a unit cannot');
+  const dSent = await C.rpc('delete_child', { p_study_id: kc.data });
+  ok(!!dSent.error, 'a child with claims already sent cannot be deleted');
+  const dOk = await C.rpc('delete_child', { p_study_id: kd });
+  const gone = await C.from('children').select('study_id').eq('study_id', kd);
+  ok(!dOk.error && gone.data.length === 0, 'unit deletes a child before the cohort', dOk.error && dOk.error.message);
+
+  console.log('transfers with slips');
+  const slipPath = `public-ffs/test-${Date.now()}.pdf`;
+  const upU = await C.storage.from('slips').upload(`public-ffs/unit-${Date.now()}.pdf`, new Blob(['%PDF-1.4 test'], { type: 'application/pdf' }), { contentType: 'application/pdf' });
+  ok(!!upU.error, 'a unit cannot upload slips');
+  const up = await RS.storage.from('slips').upload(slipPath, new Blob(['%PDF-1.4 test'], { type: 'application/pdf' }), { contentType: 'application/pdf' });
+  ok(!up.error, 'research uploads a slip', up.error && up.error.message);
+  const apIds = (await RS.from('services').select('id').eq('unit_id', 'public-ffs').eq('status', 'approved')).data.map(r => r.id);
+  const tr = await RS.rpc('record_transfer', { p_transfer: { unit_id: 'public-ffs', kind: 'claims', amount: 199, paid_on: '2026-11-02', period: '2026-11', slip_path: slipPath }, p_service_ids: apIds });
+  ok(!tr.error && tr.data, 'research records a transfer and marks the approved claims paid', tr.error && tr.error.message);
+  const paidNow = (await C.from('services').select('status,transfer_id').in('id', apIds)).data;
+  ok(apIds.length > 0 && paidNow.every(r => r.status === 'paid' && r.transfer_id === tr.data), 'the claims now say paid, with the transfer', JSON.stringify(paidNow));
+  const tC = await C.from('transfers').select('*').eq('id', tr.data);
+  const tB = await B.from('transfers').select('*').eq('id', tr.data);
+  ok(tC.data.length === 1 && tB.data.length === 0, 'the unit sees its transfer; another unit does not');
+  const seen = await C.from('transfers').update({ seen_at: new Date().toISOString() }).eq('id', tr.data).select();
+  const cheat = await C.from('transfers').update({ amount: 999999 }).eq('id', tr.data).select();
+  ok(!seen.error && seen.data.length === 1 && !!cheat.error, 'the unit marks it seen but cannot change the amount');
+  const tIns = await C.from('transfers').insert({ unit_id: 'public-ffs', kind: 'other', amount: 1, paid_on: '2026-11-02' });
+  ok(!!tIns.error, 'a unit cannot record transfers');
+  const sC = await C.storage.from('slips').createSignedUrl(slipPath, 60);
+  const sB = await B.storage.from('slips').createSignedUrl(slipPath, 60);
+  ok(!sC.error && sC.data && !!sB.error, 'the unit opens its own slip; another unit cannot', sB.error ? '' : 'B got a URL');
+
+  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kaU}, ${kaN}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });

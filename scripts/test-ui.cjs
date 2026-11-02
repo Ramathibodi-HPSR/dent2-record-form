@@ -59,9 +59,12 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(await until(() => d.querySelector('#home .tiles')), 'home dashboard renders after login');
   ok(/หน่วยทดสอบ ข/.test(d.querySelector('#acctChip').textContent), 'account chip shows the unit');
   ok(noNull(d), 'no "null" text on the home screen (R1-01)');
-  ok(d.querySelector('#verTag').textContent === 'v1.0 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
+  ok(d.querySelector('#verTag').textContent === 'v1.1 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
   ok(d.querySelector('#provSel').value === '' && d.querySelector('#provSel').classList.contains('is-missing'), '"ผู้บันทึก" starts empty and marked (R1-02)');
   ok(d.querySelectorAll('#home .tile--link').length >= 3, 'home tiles open the student list (R1-19)');
+  ok(/ค่าเหมาจ่ายรายหัวทั้งปี/.test(d.querySelector('#home').textContent) && /งวดแรก 70%/.test(d.querySelector('#home').textContent), 'home shows the capitation and its 70% first instalment (v1.1)');
+  ok(/รายการโอนเงิน/.test(d.querySelector('#home').textContent) && /ค่าตอบแทนเก็บข้อมูลรอบ 1/.test(d.querySelector('#home').textContent), 'home lists transfers and the data-collection fee');
+  ok(!!d.querySelector('#cohortBtn'), 'home offers "ส่ง cohort" while the cohort is open');
   set(w, d.querySelector('#provSel'), 'TEST-B2');
   ok(!d.querySelector('#provSel').classList.contains('is-missing'), 'mark goes once a code is chosen');
   click(w, d.querySelector('#t-kids'));
@@ -228,6 +231,11 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(/สิทธิ\s*ไม่มีสิทธิรัฐ/.test(d.querySelector('#cPreview').textContent), 'preview shows the coverage (D-68)', d.querySelector('#cPreview').textContent);
   d.querySelector('#fOne').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
   ok(await until(() => /บันทึกแล้ว/.test(d.querySelector('#toast').textContent)), 'individual service saved', d.querySelector('#toast').textContent);
+  set(w, d.querySelector('#cCode'), '67210');
+  ok(!d.querySelector('#cPlaceWrap').hidden && d.querySelector('#cSave').disabled && /บนรถทันตกรรม/.test(d.querySelector('#cPreview').textContent), 'a filling asks where it was done before it can be saved (v1.1)', d.querySelector('#cPreview').textContent);
+  set(w, d.querySelector('#cPlace'), 'van');
+  ok(!d.querySelector('#cSave').disabled && /1 ด้าน/.test(d.querySelector('#cPreview').textContent), 'on the van it can be saved; the preview says 1 surface (D-69)', d.querySelector('#cPreview').textContent);
+  set(w, d.querySelector('#cPlace'), '');
   set(w, d.querySelector('#gCode'), '177');
   ok(/\bTB-/.test(d.querySelector('#gList').textContent) && d.querySelector('#gList').textContent.includes(idB), 'per-session 177 lists every child in the rooms');
   set(w, d.querySelector('#gCode'), '176');
@@ -243,12 +251,25 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(await until(() => /บันทึกกิจกรรมแล้ว/.test(d.querySelector('#toast').textContent)), 'group activity saved', d.querySelector('#toast').textContent);
   ok(/กิจกรรมกลุ่ม/.test(d.querySelector('#ledgerBody').textContent), 'ledger shows the group row');
   ok(/ไม่มีสิทธิรัฐ: ไม่เบิก สปสช\./.test(d.querySelector('#ledgerBody').textContent), 'ledger notes the child with no public coverage');
+  // a practice child is deleted before the cohort is sent (Percy 2 Nov)
+  click(w, d.querySelector('#t-file'));
+  set(w, d.querySelector('#kidSel'), idB);
+  ok(await until(() => d.querySelector('#delKidBtn')), 'the child file offers "ลบแฟ้มนักเรียนนี้" before the cohort');
+  w.prompt = () => 'ผิด';
+  click(w, d.querySelector('#delKidBtn'));
+  ok(await until(() => /รหัสไม่ตรง/.test(toastText(d))), 'a wrong confirmation code deletes nothing');
+  w.prompt = () => idB;
+  click(w, d.querySelector('#delKidBtn'));
+  ok(await until(() => /ลบแฟ้ม .+ แล้ว/.test(toastText(d)) && !d.querySelector('#kids').hidden), 'the child is deleted after typing its code', toastText(d));
+  ok(![...d.querySelectorAll('#kidGroups .kcard')].some(e => e.textContent.includes(idB)), 'the deleted child is gone from the cards');
+  w.prompt = () => 'ทดสอบส่งกลับ (test-ui)';
   ok(errors.length === 0, 'no script errors (unit)', errors.join(' | '));
 
   console.log('unit public-ffs: submit');
   const F = boot();
   await login(F.w, F.d, 'public-ffs');
   await until(() => F.d.querySelector('#home .tiles'));
+  ok(/เพดานงบประมาณรวม/.test(F.d.querySelector('#home').textContent) && /เหลือในเพดาน|เกินเพดาน/.test(F.d.querySelector('#home').textContent), 'shared savings home shows the ceiling and what is left or over it (v1.1)');
   click(F.w, F.d.querySelector('#t-claims'));
   await until(() => !F.d.querySelector('#claims').hidden);
   set(F.w, F.d.querySelector('#gCode'), '177');
@@ -284,6 +305,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   const apprAll = await until(() => [...R.d.querySelectorAll('#research button')].find(b => /อนุมัติทั้งหมดที่รอตรวจ \([1-9]/.test(b.textContent)));
   ok(!!apprAll, 'research sees submitted claims to review');
   if (apprAll) { click(R.w, apprAll); ok(await until(() => /อนุมัติแล้ว/.test(R.d.querySelector('#toast').textContent)), 'research approves them'); }
+  ok(/เงินแต่ละหน่วย/.test(R.d.querySelector('#research').textContent) && !!R.d.querySelector('#fTransfer'), 'research sees money per unit and the transfer form (v1.1)');
   ok(R.errors.length === 0, 'no script errors (research)', R.errors.join(' | '));
 
   console.log('unit public-ffs: delete a returned claim');

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>สมุดดูแลสุขภาพช่องปาก · Dent-II</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai+Looped:wght@400;600;700&family=Prompt:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="booklet.css?v=1.0.0">
+</head>
+<body>
+<header class="ctl noprint">
+  <div class="ctl__in">
+    <div class="ctl__main">
+      <h1>สมุดดูแลสุขภาพช่องปาก (ฉบับผู้ปกครอง)<span class="demo-tag" id="demoTag" hidden>ข้อมูลตัวอย่าง</span></h1>
+      <p class="lead">พิมพ์ 2 หน้า กระดาษ A4 แนวนอน พิมพ์สองหน้า พลิกด้านสั้น แล้วพับครึ่ง</p>
+      <ol>
+        <li>กดปุ่ม "พิมพ์" เลือกกระดาษ A4 แนวนอน (Landscape)</li>
+        <li>เลือกพิมพ์สองหน้า (Two-sided) แบบพลิกด้านสั้น (Flip on short edge)</li>
+        <li>ขนาด 100% หรือ "ขนาดจริง" ไม่ย่อให้พอดีหน้า และไม่พิมพ์หัวกระดาษหรือท้ายกระดาษ</li>
+        <li>พับครึ่งตามขีดกลางแผ่น ให้หน้าที่มีรหัสนักเรียนตัวใหญ่อยู่ด้านนอก</li>
+      </ol>
+    </div>
+    <div class="ctl__side">
+      <button class="btn-print" type="button" id="printBtn" disabled>พิมพ์</button>
+      <span class="who" id="who"></span>
+      <a href="index.html">กลับไปแฟ้มนักเรียน</a>
+    </div>
+  </div>
+</header>
+<div class="warn noprint" id="warn" role="alert"></div>
+<main class="stage" id="stage" aria-live="polite"></main>
+<script src="booklet.js?v=1.0.0"></script>
+</body>
+</html>
