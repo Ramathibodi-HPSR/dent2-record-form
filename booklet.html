@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai+Looped:wght@400;600;700&family=Prompt:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="booklet.css?v=1.0.0">
+<link rel="stylesheet" href="booklet.css?v=1.1.1">
 </head>
 <body>
 <header class="ctl noprint">
@@ -16,15 +16,35 @@
     <div class="ctl__main">
       <h1>สมุดดูแลสุขภาพช่องปาก (ฉบับผู้ปกครอง)<span class="demo-tag" id="demoTag" hidden>ข้อมูลตัวอย่าง</span></h1>
       <p class="lead">พิมพ์ 2 หน้า กระดาษ A4 แนวนอน พิมพ์สองหน้า พลิกด้านสั้น แล้วพับครึ่ง</p>
-      <ol>
-        <li>กดปุ่ม "พิมพ์" เลือกกระดาษ A4 แนวนอน (Landscape)</li>
-        <li>เลือกพิมพ์สองหน้า (Two-sided) แบบพลิกด้านสั้น (Flip on short edge)</li>
-        <li>ขนาด 100% หรือ "ขนาดจริง" ไม่ย่อให้พอดีหน้า และไม่พิมพ์หัวกระดาษหรือท้ายกระดาษ</li>
-        <li>พับครึ่งตามขีดกลางแผ่น ให้หน้าที่มีรหัสนักเรียนตัวใหญ่อยู่ด้านนอก</li>
-      </ol>
+      <div class="howto">
+        <section>
+          <h2>เครื่องพิมพ์สองหน้าได้</h2>
+          <ol>
+            <li>กด "พิมพ์ทั้ง 2 ด้าน" ถ้ามีให้เลือก: กระดาษ A4 แนวนอน (Landscape)</li>
+            <li>พิมพ์สองหน้า แบบพลิกด้านสั้น (Two-sided, Flip on short edge) ใน Chrome อยู่ที่ "การตั้งค่าเพิ่มเติม"</li>
+            <li>ขนาด 100% หรือ "ขนาดจริง" ไม่ย่อให้พอดีหน้า และไม่พิมพ์หัวกระดาษหรือท้ายกระดาษ</li>
+            <li>ตรวจแผ่นแรก: หลังปกที่มีรหัสตัวใหญ่ต้องเป็นหน้า 2 "ผลการตรวจฟันครั้งแรก" และไม่กลับหัว</li>
+            <li>พับครึ่งให้ขอบกระดาษชนกัน ปกที่มีรหัสตัวใหญ่อยู่ด้านนอก</li>
+          </ol>
+        </section>
+        <section>
+          <h2>เครื่องพิมพ์สองหน้าไม่ได้</h2>
+          <ol class="alpha">
+            <li>กด "พิมพ์ด้านนอก" (พิมพ์ 1 หน้า)</li>
+            <li>นำแผ่นเดิมใส่กลับเข้าถาด เพื่อพิมพ์อีกด้านของแผ่น</li>
+            <li>กด "พิมพ์ด้านใน"</li>
+            <li>ทดลอง 1 แผ่นก่อน: หลังปกต้องเป็น "ผลการตรวจฟันครั้งแรก" และไม่กลับหัว ถ้ากลับหัว ติ๊ก "ด้านในกลับหัว" แล้วพิมพ์ด้านในใหม่</li>
+          </ol>
+        </section>
+      </div>
     </div>
     <div class="ctl__side">
-      <button class="btn-print" type="button" id="printBtn" disabled>พิมพ์</button>
+      <button class="btn-print" type="button" id="printBtn" disabled>พิมพ์ทั้ง 2 ด้าน</button>
+      <div class="one-side">
+        <button class="btn-side" type="button" id="printOut" disabled>พิมพ์ด้านนอก</button>
+        <button class="btn-side" type="button" id="printIn" disabled>พิมพ์ด้านใน</button>
+      </div>
+      <label class="flip"><input type="checkbox" id="flipIn"> ด้านในกลับหัว: หมุนด้านใน 180°</label>
       <span class="who" id="who"></span>
       <a href="index.html">กลับไปแฟ้มนักเรียน</a>
     </div>
@@ -32,6 +52,6 @@
 </header>
 <div class="warn noprint" id="warn" role="alert"></div>
 <main class="stage" id="stage" aria-live="polite"></main>
-<script src="booklet.js?v=1.0.0"></script>
+<script src="booklet.js?v=1.1.1"></script>
 </body>
 </html>

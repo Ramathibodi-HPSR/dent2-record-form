@@ -1,4 +1,4 @@
-/* Dent-II parent booklet: one A4 landscape sheet, duplex (flip on short edge), folded into a 4-page A5 booklet.
+/* Dent-II parent booklet v1.1.1: one A4 landscape sheet, duplex (flip on short edge), folded into a 4-page A5 booklet.
    Side 1 (outside) = page 4 | page 1. Side 2 (inside) = page 2 | page 3.
    Black-and-white safe: every mark has a shape, pattern or word, never colour alone. */
 :root {
@@ -22,23 +22,32 @@ body {
   font-family: var(--f-body); font-size: 15px; line-height: 1.5;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
+.nw { white-space: nowrap; }
 
 /* ---------------------------------------------------------------- screen controls */
 .ctl { background: #fff; border-bottom: 1px solid #c4c4bd; }
 .ctl__in { max-width: 1180px; margin: 0 auto; padding: 14px 16px 16px; display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: flex-start; }
-.ctl__main { flex: 1 1 420px; min-width: 0; }
+.ctl__main { flex: 1 1 520px; min-width: 0; }
 .ctl h1 { font: 600 1.35rem/1.3 var(--f-head); margin: 0 0 2px; color: var(--ink); }
 .ctl .lead { margin: 0 0 8px; font-weight: 600; color: var(--accent); }
-.ctl ol { margin: 0; padding-left: 1.3em; color: var(--ink-2); }
+.howto { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 24px; }
+.howto h2 { font: 600 1rem/1.4 var(--f-head); margin: 0 0 2px; color: var(--ink); }
+.ctl ol { margin: 0; padding-left: 1.3em; color: var(--ink-2); font-size: .93rem; }
+.ctl ol.alpha { list-style: lower-alpha; }
 .ctl ol li { margin: 1px 0; }
 .ctl__side { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex: 0 0 auto; }
 .btn-print {
-  font: 600 1.35rem/1 var(--f-head); color: #fff; background: var(--accent); border: 0; border-radius: 12px;
-  padding: 16px 34px; cursor: pointer; min-width: 200px;
+  font: 600 1.3rem/1 var(--f-head); color: #fff; background: var(--accent); border: 0; border-radius: 12px;
+  padding: 16px 30px; cursor: pointer; min-width: 220px;
 }
 .btn-print:hover { background: #0a464d; }
-.btn-print:focus-visible, .ctl a:focus-visible { outline: 3px solid #f0a020; outline-offset: 2px; }
-.btn-print[disabled] { background: #9aa; cursor: not-allowed; }
+.one-side { display: flex; gap: 8px; }
+.btn-side { flex: 1; font: 500 .95rem/1.2 var(--f-head); color: var(--accent); background: #fff; border: 2px solid var(--accent); border-radius: 10px; padding: 9px 10px; cursor: pointer; }
+.btn-side:hover { background: #eef5f5; }
+.btn-print:focus-visible, .btn-side:focus-visible, .ctl a:focus-visible, .flip input:focus-visible { outline: 3px solid #f0a020; outline-offset: 2px; }
+.btn-print[disabled], .btn-side[disabled] { background: #9aa; border-color: #9aa; color: #fff; cursor: not-allowed; }
+.flip { font-size: .9rem; color: var(--ink-2); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.flip input { width: 18px; height: 18px; }
 .ctl a { color: var(--accent); text-align: center; }
 .ctl .who { font-size: .9rem; color: var(--muted); text-align: center; }
 .demo-tag { display: inline-block; font: 600 .8rem/1.6 var(--f-head); background: #fff3c4; border: 1px solid #c9a300; color: #5a4600; border-radius: 6px; padding: 0 8px; margin-left: 8px; vertical-align: middle; }
@@ -53,20 +62,37 @@ body {
 .sheet-cap { font: 500 15px/1.4 var(--f-head); color: #333; margin: 18px 0 8px; }
 .sheet-cap:first-of-type { margin-top: 0; }
 .sheet-cap b { color: var(--accent); }
+.narrow-cap { display: none; }
 .sheet {
   position: relative; width: 297mm; height: 210mm; background: #fff; overflow: hidden;
   box-shadow: 0 2px 14px rgba(0, 0, 0, .22);
 }
-.sheet .half { position: absolute; top: 0; width: 148.5mm; height: 210mm; }
+.sheet .half { position: absolute; top: 0; width: 148.5mm; height: 210mm; background: #fff; }
 .sheet .half--l { left: 0; }
 .sheet .half--r { left: 148.5mm; }
 .sheet .foldline { position: absolute; top: 0; bottom: 0; left: 148.5mm; border-left: 1px dashed #b0b0b0; }
+/* fold ticks sit inside the printable area of office printers (5.5-9.5 mm from the edge) */
 .sheet .foldmark { position: absolute; left: calc(148.5mm - .15mm); width: .3mm; height: 4mm; background: #8a8a8a; }
-.sheet .foldmark--t { top: 0; }
-.sheet .foldmark--b { bottom: 0; }
+.sheet .foldmark--t { top: 5.5mm; }
+.sheet .foldmark--b { bottom: 5.5mm; }
+/* "ด้านในกลับหัว" rotates only the one-side inside print (พิมพ์ด้านใน), never a two-sided print (review R2 N1). */
+.print-in.flip-in .sheet--in { transform: rotate(180deg); }
+
+/* narrow screens: the four A5 pages stacked in reading order 1-2-3-4 (screen only; print is unchanged) */
+@media screen {
+  .sheets.is-narrow { width: 148.5mm; display: flex; flex-direction: column; gap: 6mm; }
+  .sheets.is-narrow .sheet { display: contents; }
+  .sheets.is-narrow .sheet .half { position: relative; left: auto; box-shadow: 0 2px 10px rgba(0, 0, 0, .22); }
+  .sheets.is-narrow .half[data-p="1"] { order: 1; }
+  .sheets.is-narrow .half[data-p="2"] { order: 2; }
+  .sheets.is-narrow .half[data-p="3"] { order: 3; }
+  .sheets.is-narrow .half[data-p="4"] { order: 4; }
+  .sheets.is-narrow .sheet-cap, .sheets.is-narrow .foldline, .sheets.is-narrow .foldmark { display: none; }
+  .sheets.is-narrow .narrow-cap { display: block; order: 0; font: 500 15px/1.4 var(--f-head); color: #333; margin: 0; }
+}
 
 /* ---------------------------------------------------------------- one A5 page */
-/* --fs-s is the size of secondary text; it follows the page's fit step (10pt, then 9pt, floor 8.5pt). */
+/* --fs-s is the size of secondary text; it follows the page's fit step (10pt, floor 9pt). */
 .page {
   --fs-s: 10pt;
   height: 210mm; padding: 10mm var(--fold) 8mm var(--outer);
@@ -84,7 +110,8 @@ body {
 .rhead b { color: var(--ink); font-family: var(--f-head); font-weight: 600; font-size: 1.1em; letter-spacing: .02em; }
 .pfoot { margin-top: auto; padding-top: 2mm; display: flex; justify-content: space-between; align-items: baseline; gap: 4mm; font-size: var(--fs-s); color: var(--muted); }
 .pno { font: 600 11pt/1 var(--f-head); color: var(--ink); }
-.meta { font-size: var(--fs-s); color: var(--ink-2); margin-top: .6mm; }
+.meta { font-size: var(--fs-s); color: var(--ink-2); margin-top: .6mm; display: flex; flex-wrap: wrap; column-gap: 3mm; }
+.meta > span { white-space: nowrap; }
 .gl { font-family: var(--f-head); }
 
 /* handwriting line and tick box */
@@ -93,27 +120,30 @@ body {
 
 /* ---------------------------------------------------------------- page 1: front cover */
 .cover .eyebrow { font-size: var(--fs-s); color: var(--muted); }
-.cover .title-row { display: flex; align-items: center; gap: 4mm; margin-top: 3mm; }
+.cover .title-row { display: flex; align-items: center; gap: 4mm; margin-top: 2.5mm; }
 .cover .title-row svg { flex: 0 0 auto; }
 .cover h1 { font: 600 23pt/1.15 var(--f-head); margin: 0; color: var(--accent); }
-.cover .proj { font: 500 11.5pt/1.35 var(--f-head); margin-top: 2.5mm; color: var(--ink); }
-.cover .period { margin-top: 1mm; color: var(--ink-2); }
-.idbox { margin-top: 6mm; border: .6mm solid var(--ink); border-radius: 3mm; padding: 3mm 5mm 3.5mm; display: flex; align-items: center; justify-content: space-between; gap: 4mm; }
+.cover .proj { font: 500 11.5pt/1.35 var(--f-head); margin-top: 2mm; color: var(--ink); }
+.cover .period { margin-top: .8mm; color: var(--ink-2); }
+.idbox { margin-top: 4mm; border: .6mm solid var(--ink); border-radius: 3mm; padding: 2.5mm 5mm 3mm; display: flex; align-items: center; justify-content: space-between; gap: 4mm; }
 .idbox .k { font: 500 11pt/1.3 var(--f-head); }
 .idbox .k small { display: block; font: 400 var(--fs-s)/1.3 var(--f-body); color: var(--muted); }
 .idbox .v { font: 600 30pt/1 var(--f-head); letter-spacing: .04em; white-space: nowrap; }
-.nameline { margin-top: 6mm; display: flex; align-items: flex-end; gap: 2mm; font-weight: 600; }
+.nameline { margin-top: 5mm; display: flex; align-items: flex-end; gap: 2mm; font-weight: 600; }
 .nameline .blank { flex: 1; height: 7mm; }
 .nameline small { font-weight: 400; color: var(--muted); font-size: var(--fs-s); white-space: nowrap; }
-.facts { margin: 5mm 0 0; display: grid; grid-template-columns: auto 1fr; column-gap: 4mm; row-gap: 1.2mm; }
+.facts { margin: 3.5mm 0 0; display: grid; grid-template-columns: auto 1fr; column-gap: 4mm; row-gap: .8mm; }
 .facts dt { color: var(--muted); white-space: nowrap; }
+.facts dt small { font-size: var(--fs-s); }
 .facts dd { margin: 0; font-weight: 600; }
-.notice { margin-top: 6mm; border: .7mm solid var(--ink); border-radius: 3mm; padding: 3.5mm 4mm; display: grid; grid-template-columns: auto 1fr; gap: 3mm; align-items: start; }
-.notice .big { font: 600 14pt/1.25 var(--f-head); }
-.notice ul { margin: 1.5mm 0 0; padding-left: 4.5mm; }
-.notice li { margin: .5mm 0; }
-.contents { margin-top: auto; font-size: var(--fs-s); color: var(--ink-2); border-top: .3mm solid var(--line-soft); padding-top: 2mm; }
-.contents ol { margin: .5mm 0 0; padding-left: 5mm; }
+.todo-box { margin-top: 4mm; border: .4mm solid var(--ink); border-radius: 3mm; padding: 2.5mm 4mm 2.5mm; }
+.todo-box .big { font: 600 12pt/1.25 var(--f-head); }
+.todo-box ol { margin: 1mm 0 0; padding-left: 5mm; }
+.todo-box li { margin: .3mm 0; }
+.notice { margin-top: auto; border: .7mm solid var(--ink); border-radius: 3mm; padding: 3mm 4mm; display: grid; grid-template-columns: auto 1fr; gap: 3mm; align-items: start; }
+.notice .big { font: 600 13pt/1.25 var(--f-head); }
+.notice ul { margin: 1.2mm 0 0; padding-left: 4.5mm; }
+.notice li { margin: .4mm 0; }
 .sample { display: inline-block; border: .4mm dashed var(--ink); padding: 0 2mm; font: 600 var(--fs-s)/1.5 var(--f-head); margin-left: 2mm; vertical-align: middle; }
 
 /* ---------------------------------------------------------------- page 2: results */
@@ -137,6 +167,7 @@ body {
 .sum { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 3.5mm; margin-top: 3.5mm; }
 .sum h3 { border-bottom: .3mm solid var(--ink); padding-bottom: .5mm; }
 .srow { display: grid; grid-template-columns: 5mm 1fr; column-gap: 1.5mm; padding: .9mm 0; border-bottom: .2mm solid var(--line-soft); }
+.srow.noicon { grid-template-columns: 1fr; }
 .srow svg { margin-top: .5mm; }
 .srow .b { min-width: 0; }
 .srow .t { font-weight: 700; margin-right: 1.5mm; }
@@ -144,31 +175,34 @@ body {
 .srow .teeth { font-size: var(--fs-s); color: var(--ink-2); }
 .srow .teeth span { margin-right: 2.5mm; }
 .srow .teeth i { font-style: normal; color: var(--muted); white-space: nowrap; }
+.srow .gloss { display: block; font-size: var(--fs-s); color: var(--ink-2); line-height: 1.3; margin-top: .3mm; }
+.srow .gloss.keep { font-weight: 700; }
 .srow.zero .t { font-weight: 400; }
-.srow.note { grid-template-columns: 1fr; font-size: var(--fs-s); color: var(--ink-2); border-bottom: 0; }
+.srow.note { font-size: var(--fs-s); color: var(--ink-2); border-bottom: 0; }
 .urgent { margin-top: 3.5mm; border: .8mm solid var(--ink); border-radius: 2.5mm; padding: 2.5mm 3.5mm; display: grid; grid-template-columns: auto 1fr; gap: 3mm; align-items: start; }
 .urgent .big { font: 600 12.5pt/1.25 var(--f-head); }
 .urgent .why { font-weight: 700; margin: .4mm 0; }
 
 /* ---------------------------------------------------------------- page 3: care plan */
 .plan-intro { font-size: var(--fs-s); color: var(--ink-2); margin-top: .8mm; }
+.plan-intro .reprint { font-weight: 700; }
 .tl { width: 100%; border-collapse: collapse; margin-top: 2.5mm; }
 .tl th, .tl td { border-bottom: .2mm solid var(--line-soft); vertical-align: top; text-align: left; padding: 1mm 0; }
 .tl thead th { font-size: var(--fs-s); font-weight: 400; color: var(--muted); border-bottom: .4mm solid var(--ink); padding: 0 0 .6mm; }
-.tl .mn { width: 13mm; text-align: center; padding-right: 1mm; font: 600 1.05em/1.42 var(--f-head); white-space: nowrap; }
+.tl .mn { width: 12mm; text-align: center; padding-right: 1mm; font: 600 1.05em/1.42 var(--f-head); white-space: nowrap; }
 .tl thead .mn { font: 400 var(--fs-s)/1.42 var(--f-body); }
-.tl .ml { width: 17mm; padding-right: 1.5mm; font-size: var(--fs-s); color: var(--ink-2); white-space: nowrap; }
+.tl .ml { width: 29mm; padding-right: 2.5mm; font-size: var(--fs-s); color: var(--ink-2); line-height: 1.3; }
 .tl tbody td.ml { padding-top: 1.35mm; }
 .tl tr.empty td { color: var(--line); }
 .tl tr.empty .mn { color: var(--muted); font-weight: 500; }
 .tl tr.empty th, .tl tr.empty td { padding: .45mm 0; }
-.tl tr.empty td.ml { padding: .45mm 1.5mm .45mm 0; }
+.tl tr.empty td.ml { padding: .45mm 2.5mm .45mm 0; }
 .it { display: flex; flex-wrap: wrap; align-items: center; column-gap: 2mm; row-gap: .3mm; padding: .5mm 0; }
 .items .it + .it { border-top: .2mm dotted var(--line-soft); }
-.it .lab { flex: 1 1 30mm; min-width: 0; }
+.it .lab { flex: 1 1 auto; min-width: 0; }
 .it .lab svg, .grp .gname svg { vertical-align: -.4mm; margin-right: 1mm; }
 .it .dt { margin-left: auto; font-size: var(--fs-s); white-space: nowrap; color: var(--ink-2); }
-.it .dt .blank { width: 19mm; }
+.it .dt .blank { width: 20mm; }
 .it.done .dt { font-weight: 700; color: var(--ink); }
 /* flow step: services of one month side by side, date line without the word "วันที่" */
 .tl.flow .items { display: flex; flex-wrap: wrap; column-gap: 4mm; }
@@ -177,7 +211,7 @@ body {
 .tl.flow .it .lab { flex: 0 1 auto; }
 .tl.flow .it .dt { margin-left: 1mm; }
 .tl.flow .it .dt .w { display: none; }
-.tl.flow .it .dt .blank { width: 13mm; }
+.tl.flow .it .dt .blank { width: 18mm; }
 /* services with no set month: one line per whole-mouth service, one line per tooth service with a box per tooth */
 .any { margin-top: 3mm; }
 .anylist { border-top: .4mm solid var(--ink); }
@@ -185,13 +219,13 @@ body {
 .anylist > .it { padding: .7mm 0; }
 .grp { display: grid; grid-template-columns: 40mm minmax(0, 1fr); column-gap: 2mm; align-items: start; padding: .7mm 0; }
 .grp .gname { padding-top: .2mm; }
-.chips { display: flex; flex-wrap: wrap; gap: .8mm 1.8mm; }
+.grp .gname em { font-style: normal; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 1mm 1.8mm; }
 .chip { display: inline-flex; align-items: center; gap: .9mm; white-space: nowrap; }
 .chip .box { width: 4.2mm; height: 4.2mm; }
 .chip b { font-family: var(--f-head); font-weight: 600; min-width: 4.3mm; }
-.chip b.prim { font-weight: 400; }
-.chip .cb { width: 9mm; }
-.chip .cd { font-size: var(--fs-s); font-weight: 700; min-width: 9mm; }
+.chip .cb { width: 16mm; }
+.chip .cd { font-size: var(--fs-s); font-weight: 700; min-width: 16mm; }
 .plan-key { margin-top: 2.5mm; font-size: var(--fs-s); color: var(--ink-2); display: flex; flex-wrap: wrap; gap: .5mm 4mm; }
 .plan-key span { display: inline-flex; align-items: center; gap: 1.2mm; white-space: nowrap; }
 .plan-key .box { width: 3.6mm; height: 3.6mm; border-width: .4mm; }
@@ -201,21 +235,24 @@ body {
 .tips { margin: 1.5mm 0 0; padding: 0; list-style: none; }
 .tips li { display: grid; grid-template-columns: 5mm 1fr; gap: 1.5mm; padding: 1.1mm 0; border-bottom: .2mm solid var(--line-soft); }
 .tips li::before { content: ""; width: 3.2mm; height: 3.2mm; margin-top: 1mm; border: .45mm solid var(--ink); border-radius: 50%; }
-.ack { margin-top: 5mm; border: .4mm solid var(--ink); border-radius: 2.5mm; padding: 3mm 4mm 3.5mm; }
-.signs { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; margin-top: 2.5mm; }
-.sign h4 { font: 600 11pt/1.3 var(--f-head); margin: 0 0 1mm; }
-.sign .ln { display: flex; align-items: flex-end; gap: 1.5mm; height: 8.5mm; font-size: var(--fs-s); white-space: nowrap; }
+.ack { margin-top: 4.5mm; border: .4mm solid var(--ink); border-radius: 2.5mm; padding: 2.5mm 4mm 3mm; }
+.signs { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; margin-top: 1mm; }
+.sign h4 { font: 600 11pt/1.3 var(--f-head); margin: 0; }
+.sign .says { font-size: var(--fs-s); color: var(--ink-2); margin: 0 0 .5mm; }
+.sign .ln { display: flex; align-items: flex-end; gap: 1.5mm; height: 8mm; font-size: var(--fs-s); white-space: nowrap; }
 .sign .ln .blank { flex: 1; height: 6mm; }
-.notes { margin-top: 4.5mm; flex: 1 1 0; min-height: 17mm; display: flex; flex-direction: column; overflow: hidden; }
+.notes { margin-top: 4mm; flex: 1 1 0; min-height: 17mm; display: flex; flex-direction: column; overflow: hidden; }
 .notes h3 { font-size: 10.5pt; margin: 0; }
 .rules { flex: 1 1 0; min-height: 0; overflow: hidden; }
 .rule { height: 7.5mm; border-bottom: .25mm dotted #555; }
-.return { margin-top: 4.5mm; border: .8mm solid var(--ink); border-radius: 2.5mm; padding: 3mm 4mm; display: grid; grid-template-columns: auto 1fr; gap: 3mm; align-items: start; }
-.return .big { font: 600 13pt/1.25 var(--f-head); }
-.return .ln { display: flex; align-items: flex-end; gap: 1.5mm; margin-top: 2.5mm; font-size: var(--fs-s); white-space: nowrap; }
+.return { margin-top: 4mm; border: .8mm solid var(--ink); border-radius: 2.5mm; padding: 2.5mm 4mm; display: grid; grid-template-columns: auto 1fr; gap: 3mm; align-items: start; }
+.return .big { font: 600 12.5pt/1.25 var(--f-head); }
+.return .ln { display: flex; align-items: flex-end; gap: 1.5mm; margin-top: 2mm; font-size: var(--fs-s); white-space: nowrap; }
 .return .ln .blank { flex: 1; height: 6mm; }
-.backfoot { margin-top: 4mm; border-top: .3mm solid var(--line-soft); padding-top: 2mm; font-size: var(--fs-s); color: var(--ink-2); display: grid; grid-template-columns: 1fr auto; gap: 1mm 4mm; }
+.backfoot { margin-top: 3.5mm; border-top: .3mm solid var(--line-soft); padding-top: 1.5mm; font-size: var(--fs-s); color: var(--ink-2); display: grid; grid-template-columns: 1fr auto; gap: 1mm 4mm; }
 .backfoot .unit { font: 600 11pt/1.3 var(--f-head); color: var(--ink); }
+.backfoot .ln { display: flex; align-items: flex-end; gap: 1.5mm; height: 7mm; white-space: nowrap; }
+.backfoot .ln .blank { height: 5.5mm; }
 .backfoot .id { font: 600 12pt/1.3 var(--f-head); color: var(--ink); text-align: right; }
 
 /* ---------------------------------------------------------------- fit steps, added by booklet.js only when a page would overflow */
@@ -226,6 +263,7 @@ body {
 .page.d1 .chart { margin-top: 2mm; }
 .page.d1 .sum, .page.d1 .urgent, .page.d1 .any { margin-top: 2.5mm; }
 .page.d1 .rhead { margin-bottom: 2mm; }
+.page.d1 .todo-box, .page.d1 .nameline { margin-top: 3mm; }
 .page.d2 { line-height: 1.28; }
 .page.d2 .tl tr.empty th, .page.d2 .tl tr.empty td { padding: .2mm 0; }
 .page.d2 .tl tbody td.ml { padding-top: .8mm; }
@@ -236,26 +274,34 @@ body {
 .page.d2 .sum { gap: 2.5mm; }
 .page.d2 .urgent { padding: 1.8mm 3mm; }
 .page.d2 .urgent .big { font-size: 11.5pt; }
-.page.c1 .risk .why, .page.c1 .srow.note, .page.c1 .found .teeth { display: none; }
+/* c1, c2 leave out what is said elsewhere: the teeth under "ผลการตรวจ" (the chart shows them), the risk
+   explanation, the cross-reference to page 3, the sealant gloss; then the size and number keys. */
+.page.c1 .risk .why, .page.c1 .srow.note, .page.c1 .found .teeth, .page.c1 .gloss:not(.keep), .page.c1 .urgent .adv1, .page.c1 .urgent .soonlist { display: none; }
+.page.c2 .keys .k2 { display: none; }
+.page.c2 .chart svg { width: 94%; margin: 0 auto; }
+/* c2 also stacks the summary: findings as one wrapped line of counts, then each action on one full-width line */
+.page.c2 .sum { grid-template-columns: minmax(0, 1fr); gap: 1.5mm; margin-top: 2mm; }
+.page.c2 .found { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4mm; row-gap: .5mm; }
+.page.c2 .found h3 { margin: 0 2mm 0 0; border: 0; padding: 0; }
+.page.c2 .found .srow { display: inline-grid; border-bottom: 0; padding: 0; }
+.page.c2 .urgent { grid-template-columns: minmax(0, 1fr); }
+.page.c2 .urgent > svg { display: none; }
+.page.c2 .urgent .big, .page.c2 .urgent .why { display: inline; margin-right: 1.5mm; }
 .page.f9 { font-size: 9.5pt; --fs-s: 9pt; }
 .page.f9 h2 { font-size: 13pt; }
 .page.f9 h3 { font-size: 10.5pt; }
-.page.f85 { font-size: 9pt; --fs-s: 8.5pt; line-height: 1.24; }
-.page.f85 h2 { font-size: 12.5pt; }
-.page.f85 h3 { font-size: 10pt; }
-.page.f9 .box, .page.f85 .box { width: 4mm; height: 4mm; }
-.page.f9 .chart svg { width: 92%; margin: 0 auto; }
-.page.f85 .chart svg { width: 86%; margin: 0 auto; }
+.page.f9 .box { width: 4mm; height: 4mm; }
 
 /* ---------------------------------------------------------------- print */
 @page { size: A4 landscape; margin: 0; }
 @media print {
   html, body { background: #fff; margin: 0; padding: 0; }
-  .noprint, .ctl, .warn, .sheet-cap, .nodata { display: none !important; }
+  .noprint, .ctl, .warn, .sheet-cap, .narrow-cap, .nodata { display: none !important; }
   .stage { padding: 0; overflow: visible; }
-  .sheets { zoom: 1 !important; width: 297mm; margin: 0; }
+  .sheets { zoom: 1 !important; width: 297mm; margin: 0; display: block; }
   .sheet { box-shadow: none; break-after: page; page-break-after: always; break-inside: avoid; }
-  .sheet:last-of-type { break-after: auto; page-break-after: auto; }
+  .sheet:last-of-type, .print-out .sheet--out, .print-in .sheet--in { break-after: auto; page-break-after: auto; }
+  .print-out .sheet--in, .print-in .sheet--out { display: none; }
   .sheet .foldline { display: none; }
   .page.is-over { box-shadow: none; }
 }

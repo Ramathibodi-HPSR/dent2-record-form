@@ -1518,6 +1518,8 @@ function bookletData(u, k) {
       counts: { decayed_perm: cnt(t => t.type === 'p' && t.B >= 3), decayed_prim: cnt(t => t.type === 'd' && t.B >= 3), filled: cnt(t => [3, 4, 5, 6].includes(t.A)),
         sealed: cnt(t => [1, 2].includes(t.A)), need_seal: cnt(t => t.need === 2), need_fill: cnt(t => t.need === 4), need_refer: cnt(t => t.need >= 5) } },
     plan, month_labels: Array.from({ length: 12 }, (_, i) => thMon(addMonths(k.base, i + 1))),
+    // Date span of each plan month, as in the plan grid (monthRange): month 1 starts on the exam day.
+    month_ranges: Array.from({ length: 12 }, (_, i) => { const r = monthRange(k.base, i + 1); return { from: toInput(r.from), to: r.to ? toInput(r.to) : null }; }),
     homecare: $('#homecare') ? $('#homecare').textContent : '', return_by: toInput(addMonths(k.base, 12)) };
 }
 $('#printBtn').addEventListener('click', () => {
@@ -1525,7 +1527,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.1.0', '_blank');
+  const w = window.open('booklet.html?v=1.1.1', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
