@@ -215,28 +215,23 @@ function refValue(u, code, tooth) {
 }
 
 /* ================================================================ money by fee schedule (01–03) */
-// Thai fiscal year (Oct–Sep), the NHSO year for "once a year".
-const fyOf = d => d.getFullYear() + (d.getMonth() >= 9 ? 1 : 0);
 const rateOf = (u, code) => (PRICE[code] ? (u.arm === 'control' || u.ptype === 'public' ? PRICE[code].lc : PRICE[code].full) : 0);
 // Round-1 budget of one child (01 §2, 02 §2): the care plan at Table 1 rates (exams, fluoride, brushing kit,
-// sealants); fillings = permanent teeth needing restoration × the 1-surface rate; NHSO's share = 174 and 170 once
-// per fiscal year in which the plan has them, and sealants up to two teeth (the project pays from the third).
-// No NHSO share for a child with no public coverage (D-68). Primary teeth and referrals are not counted (D-54).
+// sealants); fillings = permanent teeth needing restoration × the 1-surface rate. NHSO's share is a flat 700 baht per
+// child (exam 100 + fluoride 100 + sealants 500, which every child gets; Percy 2 Nov, D-76), none for a child with no
+// public coverage (D-68). Primary teeth and referrals are not counted (D-54).
+const NHSO_FLAT = 700;
 function childBudget(u, k) {
-  let plan = 0, fillN = 0, seal = 0;
-  const fy = { '174': new Set(), '170': new Set() };
+  let plan = 0, fillN = 0;
   for (const r of buildPlan(k)) {
     if (r.study || r.prim) continue;
-    if (r.key === 'exam' || r.key === 'fl') {
-      const code = r.key === 'exam' ? '174' : '170';
-      plan += rateOf(u, code) * r.months.length;
-      r.months.forEach(m => fy[code].add(fyOf(addMonths(k.base, m === 1 ? 0 : m))));
-    } else if (r.key === 'brush') plan += rateOf(u, '176');
-    else if (r.code === '171') { plan += rateOf(u, '171'); seal++; }
+    if (r.key === 'exam') plan += rateOf(u, '174') * r.months.length;
+    else if (r.key === 'fl') plan += rateOf(u, '170') * r.months.length;
+    else if (r.key === 'brush') plan += rateOf(u, '176');
+    else if (r.code === '171') plan += rateOf(u, '171');
     else if (r.code === '67210') fillN++;
   }
-  const nhso = k.c.coverage === 'none' ? 0
-    : (PRICE['174'] ? PRICE['174'].nhso : 0) * fy['174'].size + (PRICE['170'] ? PRICE['170'].nhso : 0) * fy['170'].size + Math.min(seal, 2) * rateOf(u, '171');
+  const nhso = k.c.coverage === 'none' ? 0 : NHSO_FLAT;
   return { plan, fillN, fill: fillN * rateOf(u, '67210'), nhso };
 }
 // Unit totals from the children examined at round 1. Capitation (01) = plan + fillings − NHSO; ceiling (02) =
@@ -667,7 +662,7 @@ function moneySection(u) {
   const notes = [];
   if (u.arm !== 'control') {
     notes.push(`ที่มาของยอด: แผนการดูแลตามอัตราค่าบริการ ${fmt(b.plan)} บาท` + (u.van_fills === true ? ` + อุดฟัน ${b.fillN} ซี่ ${fmt(b.fill)} บาท` : '')
-      + (u.arm === 'ffs' ? ' แล้วบวกส่วนเพิ่ม 20%' : '') + ` − ส่วนที่เบิกจาก สปสช. ${fmt(b.nhso)} บาท`);
+      + (u.arm === 'ffs' ? ' แล้วบวกส่วนเพิ่ม 20%' : '') + ` − ส่วนที่เบิกจาก สปสช. ${fmt(b.nhso)} บาท (คนละ 700 บาท: ตรวจ 100 ฟลูออไรด์ 100 เคลือบหลุมร่องฟัน 500)`);
     if (u.van_fills == null && b.fillN) notes.push(`ยังไม่รวมค่าอุดฟัน ${b.fillN} ซี่ (${fmt(b.fill)} บาท) จนกว่าหน่วยจะตั้งค่าว่ารถทันตกรรมอุดฟันได้ (ด้านบน)`);
     if (u.van_fills === false) notes.push('รถทันตกรรมของหน่วยอุดฟันไม่ได้ จึงไม่รวมค่าอุดฟัน นักเรียนที่ต้องอุดฟันส่งต่อตามระบบปกติของ สปสช.');
   }
@@ -1547,7 +1542,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.2.2', '_blank');
+  const w = window.open('booklet.html?v=1.2.3', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -2046,7 +2041,7 @@ function moneyTable(ids) {
   return el('section', {}, el('h2', { text: 'เงินแต่ละหน่วย' }),
     el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
       el('thead', {}, el('tr', {}, ...['หน่วย', 'ตรวจครั้งแรก', 'เหมาจ่าย / เพดาน', 'เบิกแล้ว', 'อนุมัติ รอโอน', 'โอนแล้ว', 'ค่าเก็บข้อมูลรอบ 1', 'รถอุดฟันได้', 'cohort'].map((h, i) => el('th', { scope: 'col', class: i >= 1 && i <= 6 ? 'num' : '', text: h })))), tb)),
-    el('p', { class: 'small muted', text: 'คำนวณจากผลตรวจครั้งแรก: เหมาจ่าย = แผนการดูแลตามอัตรา + อุดฟัน (ถ้ารถอุดฟันได้) − ส่วนที่เบิกจาก สปสช. · เพดาน = (แผน + อุดฟัน) × 1.2 − ส่วนที่เบิกจาก สปสช. · "รถอุดฟันได้" หน่วยตั้งเองตอนเริ่มใช้ ทีมวิจัยแก้ได้' }));
+    el('p', { class: 'small muted', text: 'คำนวณจากผลตรวจครั้งแรก: เหมาจ่าย = แผนการดูแลตามอัตรา + อุดฟัน (ถ้ารถอุดฟันได้) − ส่วนที่เบิกจาก สปสช. (คนละ 700 บาท เด็กไม่มีสิทธิรัฐไม่หัก) · เพดาน = (แผน + อุดฟัน) × 1.2 − ส่วนที่เบิกจาก สปสช. · "รถอุดฟันได้" หน่วยตั้งเองตอนเริ่มใช้ ทีมวิจัยแก้ได้' }));
 }
 // The research team records a transfer with its slip; a claims transfer also marks that unit's approved services paid.
 // The unit sees it on its home page as a new transfer (Percy 2 Nov).
