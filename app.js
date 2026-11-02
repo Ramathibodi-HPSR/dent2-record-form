@@ -1547,7 +1547,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.2.0', '_blank');
+  const w = window.open('booklet.html?v=1.2.1', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -2014,7 +2014,7 @@ function reviewSection(ids) {
     sub.length ? el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
       el('thead', {}, el('tr', {}, ...['วันที่', 'หน่วย', 'นักเรียน', 'บริการ', 'ซี่', 'ยอดจ่าย', ''].map((h, i) => el('th', { scope: 'col', class: i === 5 ? 'num' : '', text: h })))), tb))
       : el('p', { class: 'small muted', text: 'ไม่มีรายการรอตรวจ' }),
-    el('p', { class: 'small muted', text: 'ยอดจ่ายคิดตามอัตราค่าบริการ 01–03: บริการที่ สปสช. จ่ายก่อน (ตรวจ 174 ฟลูออไรด์ 170 ปีงบละครั้ง เคลือบหลุมร่องฟัน 2 ซี่แรก) โครงการจ่ายส่วนต่าง เด็กไม่มีสิทธิรัฐจ่ายเต็มอัตรา อุดฟันและ PRR จ่ายเฉพาะบนรถทันตกรรม ฟันน้ำนมไม่นับ' }));
+    el('p', { class: 'small muted', text: 'ยอดจ่ายคิดตามอัตราค่าบริการ 01–03: บริการที่ สปสช. จ่ายก่อน (ตรวจ 174 ฟลูออไรด์ 170 ปีงบละครั้ง เคลือบหลุมร่องฟัน 2 ซี่แรก) โครงการจ่ายส่วนต่าง เด็กไม่มีสิทธิรัฐจ่ายเต็มอัตรา อุดฟันและ PRR จ่ายเฉพาะบนรถทันตกรรม (กลุ่มควบคุมจ่ายอุดฟันบนรถ ไม่จ่าย PRR) ฟันน้ำนมไม่นับ' }));
 }
 // Money per unit, cohort status and the van-filling setting, for the research team.
 function moneyTable(ids) {

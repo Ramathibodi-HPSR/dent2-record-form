@@ -163,8 +163,8 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
     svc('public-control', kaN, '174', '2026-11-01'), svc('public-control', kaN, '67210', '2026-11-01', { tooth: 46, place: 'van' }),
   ]).select('id');
   const i3 = (p3.data || []).map(r => r.id), q3 = await pay(A, i3), v3 = i3.map(id => q3[id]);
-  ok(JSON.stringify(v3) === JSON.stringify([43, 0, 156, 0, 0, 242, 0, 0, 143, 360]),
-    'control: top-up of 174/170 once a year, sealants from the 3rd tooth, no treatment for UC, brushing 0; no coverage: 174 in full and the van filling', JSON.stringify(v3));
+  ok(JSON.stringify(v3) === JSON.stringify([43, 0, 156, 0, 0, 242, 360, 0, 143, 360]),
+    'control: top-up of 174/170 once a year, sealants from the 3rd tooth, van filling for every child (D-74), brushing 0; no coverage: 174 in full', JSON.stringify(v3));
   const capPay = await pay(B, [s1.data.id]);
   ok(capPay[s1.data.id] === 0, 'capitation: no item payments');
 
