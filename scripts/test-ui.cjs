@@ -16,7 +16,8 @@ const ok = (cond, label, extra) => { if (cond) { pass++; console.log('  ✓', la
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms = 15000) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { const v = fn(); if (v) return v; } catch (e) { /* not yet */ } await sleep(150); } return null; }
 
-function boot() {
+// tweak edits app.js before it runs (only the D-77 check uses it, to reach txFlags inside the app's closure).
+function boot(tweak = src => src) {
   const html = fs.readFileSync(path.join(APP, 'index.html'), 'utf8').replace(/<script src="[^"]+"><\/script>/g, '');
   const dom = new JSDOM(html, { url: 'http://localhost:8765/', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
@@ -28,7 +29,7 @@ function boot() {
   w.addEventListener('unhandledrejection', e => errors.push('unhandled: ' + String(e.reason && e.reason.message || e.reason)));
   w.console.error = (...a) => errors.push(a.join(' '));
   w.supabase = require('@supabase/supabase-js');   // the browser loads vendor/supabase.js (UMD); jsdom uses the Node build
-  for (const f of ['config.js', 'app.js']) w.eval(fs.readFileSync(path.join(APP, f), 'utf8'));
+  for (const f of ['config.js', 'app.js']) { const src = fs.readFileSync(path.join(APP, f), 'utf8'); w.eval(f === 'app.js' ? tweak(src) : src); }
   return { w, d: w.document, errors };
 }
 const click = (w, el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
@@ -332,6 +333,27 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(!!delBtn, 'a returned claim has "ลบ" (R1-15)');
   if (delBtn) { click(G.w, delBtn); ok(await until(() => /ลบแล้ว/.test(G.d.querySelector('#toast').textContent)), 'returned claim deleted', G.d.querySelector('#toast').textContent); }
   ok(G.errors.length === 0, 'no script errors (ffs delete)', G.errors.join(' | '));
+
+  console.log('warnings by NHSO fiscal year and the reseal rule (D-77)');
+  // Pure check of txFlags on made-up services in a page whose app.js also hands txFlags out; the server pays by the
+  // same rules (scripts/test-rls.cjs).
+  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags };\n})();\n'));
+  const fl = H.w.eval(`(() => {
+    const tx = (id, code, date, tooth) => { const [y, m, d] = date.split('-').map(Number); return { id, kid: 'X', code, tooth: tooth || null, date: new Date(y, m - 1, d) }; };
+    const run = (arm, list, exams = []) => { const f = __t.txFlags({ arm, byId: {}, exams, tx: list }); return list.map(t => f.get(t.id).join(' ')); };
+    const loss = [{ study_id: 'X', attended: true, exam_date: '2027-04-01', teeth: { 16: { t: 'p', A: 0 } } }];
+    return {
+      fl: run('control', [tx(1, '170', '2026-09-30'), tx(2, '170', '2026-10-01'), tx(3, '170', '2026-12-01')]),
+      kit: run('ffs', [tx(1, '176', '2026-12-20'), tx(2, '176', '2027-01-10'), tx(3, '176', '2027-10-01')]),
+      seal: run('ffs', [tx(1, '171', '2026-11-01', 16), tx(2, '171', '2027-05-01', 16)]),
+      sealLoss: run('ffs', [tx(1, '171', '2026-11-01', 16), tx(2, '171', '2027-05-01', 16)], loss),
+      sealCtl: run('control', [tx(1, '171', '2026-11-01', 16), tx(2, '171', '2027-05-01', 16)], loss),
+    };
+  })()`);
+  ok(!fl.fl[1] && /ปีงบละ 1 ครั้ง/.test(fl.fl[2]) && !/รอยืนยัน/.test(fl.fl.join()), 'control fluoride: 30 Sep and 1 Oct are two fiscal years; a 2nd in the same fiscal year is flagged, no "รอยืนยัน"', JSON.stringify(fl.fl));
+  ok(!fl.kit[0] && /175/.test(fl.kit[1]) && !fl.kit[2], 'brushing kit: Dec and Jan are one fiscal year (flagged), 1 Oct starts a new one', JSON.stringify(fl.kit));
+  ok(/หลุด/.test(fl.seal[1]) && !fl.sealLoss[1], 'reseal of 16 flagged unless an exam in between records the sealant lost', JSON.stringify([fl.seal, fl.sealLoss]));
+  ok(/ปีงบละ 1 ครั้ง/.test(fl.sealCtl[1]), 'control: the same tooth sealed twice in one fiscal year is flagged even after a loss', JSON.stringify(fl.sealCtl));
 
   console.log(`\n${pass} passed, ${fail} failed · enrolled ${newId}`);
   process.exit(fail ? 1 : 0);

@@ -138,6 +138,7 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   // ---------------------------------------------------------------- v1.1: what the project pays (fee schedules 01–03)
   const pay = async (c, ids) => Object.fromEntries(((await c.from('v_services_pay').select('id,project_pay,pay_note').in('id', ids)).data || []).map(r => [r.id, +r.project_pay]));
   const svc = (unit_id, study_id, code, service_date, extra = {}) => ({ unit_id, study_id, code, service_date, status: 'draft', ...extra });
+  const notes = async (c, ids) => Object.fromEntries(((await c.from('v_services_pay').select('id,pay_note').in('id', ids)).data || []).map(r => [r.id, r.pay_note || '']));
   console.log('fee schedule 02 (shared savings, C)');
   const kcN = (await C.rpc('enrol_child', { p_child: { school_id: 'C-01', ...consented, coverage: 'none' } })).data;
   const p2 = await C.from('services').insert([
@@ -151,6 +152,27 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const i2 = (p2.data || []).map(r => r.id), q2 = await pay(C, i2), v2 = i2.map(id => q2[id]);
   ok(JSON.stringify(v2) === JSON.stringify([43, 156, 256, 0, 0, 0, 242, 360, 0, 0, 324, 143, 242]),
     'UC: 174 = 143−100, fluoride 256−100 then 256, twice in a month 0, sealants from the 3rd tooth, van filling 360, clinic 0, primary 0, PRR 324; no coverage: full rate', JSON.stringify(v2));
+  // D-77: brushing kit once per fiscal year; a reseal of the same tooth only after an exam records the sealant lost or partial
+  const p2b = await C.from('services').insert([
+    svc('public-ffs', kc.data, '176', '2026-11-01'), svc('public-ffs', kc.data, '176', '2026-11-02'), svc('public-ffs', kc.data, '171', '2026-11-01', { tooth: 16 }),
+  ]).select('id');
+  const i2b = (p2b.data || []).map(r => r.id), q2b = await pay(C, i2b), n2b = await notes(C, i2b);
+  ok(!p2b.error && q2b[i2b[0]] === 159 && q2b[i2b[1]] === 0 && /175/.test(n2b[i2b[1]]),
+    'D-77: brushing kit 176 = 159, a 2nd in the same fiscal year 0 (repeats are 175)', p2b.error ? p2b.error.message : JSON.stringify([q2b, n2b]));
+  ok(q2b[i2b[2]] === 0 && /หลุด/.test(n2b[i2b[2]]), 'D-77: tooth 16 sealed again with no exam recording a loss: 0', JSON.stringify(n2b[i2b[2]]));
+  const rc = await C.from('exams').insert({ ...exam, study_id: kc.data, unit_id: 'public-ffs', round: 'recall', exam_date: '2026-11-02', place: 'school',
+    examiner_code: 'TEST-C1', teeth: mouth({ 16: { A: 1 } }) }).select('id').single();
+  const p2c = await C.from('services').insert(svc('public-ffs', kc.data, '171', '2026-11-02', { tooth: 16 })).select('id').single();
+  const q2c = p2c.data ? await pay(C, [p2c.data.id]) : {};
+  ok(!rc.error && !p2c.error && q2c[p2c.data.id] === 242, 'D-77: after a recall exam records the sealant of 16 as partial (A 1), the 3rd sealant on 16 is paid 242',
+    (rc.error || p2c.error || {}).message || JSON.stringify(q2c));
+  const kc2 = (await C.rpc('enrol_child', { p_child: { school_id: 'C-01', ...consented } })).data;
+  const p2d = await C.from('services').insert([
+    svc('public-ffs', kc2, '171', '2026-11-01', { tooth: 16 }), svc('public-ffs', kc2, '171', '2026-11-01', { tooth: 16 }), svc('public-ffs', kc2, '171', '2026-11-02', { tooth: 26 }),
+  ]).select('id');
+  const i2d = (p2d.data || []).map(r => r.id), q2d = await pay(C, i2d), n2d = await notes(C, i2d);
+  ok(i2d.map(id => q2d[id]).join() === '0,0,0' && /ซี่ที่ 2/.test(n2d[i2d[2]]),
+    'D-77: a refused reseal does not use up a tooth NHSO covers (26 is still the 2nd, claimed from NHSO)', JSON.stringify(i2d.map(id => [q2d[id], n2d[id]])));
 
   console.log('fee schedule 03 (control, A)');
   const A = await login('public-control');
@@ -165,6 +187,10 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const i3 = (p3.data || []).map(r => r.id), q3 = await pay(A, i3), v3 = i3.map(id => q3[id]);
   ok(JSON.stringify(v3) === JSON.stringify([43, 0, 156, 0, 0, 242, 360, 0, 143, 360]),
     'control: top-up of 174/170 once a year, sealants from the 3rd tooth, van filling for every child (D-74), brushing 0; no coverage: 174 in full', JSON.stringify(v3));
+  const p3b = await A.from('services').insert(svc('public-control', kaU, '171', '2026-11-02', { tooth: 16 })).select('id').single();
+  const q3b = p3b.data ? await pay(A, [p3b.data.id]) : {}, n3b = p3b.data ? await notes(A, [p3b.data.id]) : {};
+  ok(!p3b.error && q3b[p3b.data.id] === 0 && /ปีละ 1 ครั้ง/.test(n3b[p3b.data.id]), 'control (D-77): the same tooth sealed twice in one fiscal year: the 2nd pays 0',
+    p3b.error ? p3b.error.message : JSON.stringify([q3b, n3b]));
   const capPay = await pay(B, [s1.data.id]);
   ok(capPay[s1.data.id] === 0, 'capitation: no item payments');
 
@@ -241,6 +267,6 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const evDel = await C.from('evidence').delete().eq('id', evRow.data.id).select();
   ok(!evRm.error && !evDel.error && evDel.data.length === 1, 'the unit removes a file uploaded by mistake');
 
-  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kaU}, ${kaN}`);
+  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kc2}, ${kaU}, ${kaN}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });

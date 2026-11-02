@@ -37,6 +37,7 @@ const thMon = d => `${TH_M[d.getMonth()]} ${String(d.getFullYear() + 543).slice(
 const addMonths = (d, m) => { const x = new Date(d.getFullYear(), d.getMonth() + m, 1); x.setDate(Math.min(d.getDate(), new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate())); return x; };
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 const monKey = d => `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;   // sortable month key (0-based month)
+const fyOf = d => d.getFullYear() + (d.getMonth() >= 9 ? 1 : 0);   // NHSO (Thai fiscal) year Oct–Sep, as v_services_pay counts it
 const monKeyLabel = key => { const [y, m] = key.split('-').map(Number); return thMon(new Date(y, m, 1)); };
 const toInput = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const fromInput = s => { const [y, m, dd] = String(s || '').split('-').map(Number); return y && m && dd ? new Date(y, m - 1, dd) : null; };
@@ -1623,9 +1624,15 @@ function renderKidTx() {
 
 /* ================================================================ CLAIMS / SERVICE RECORDING (D-65) */
 $('#kidAddBtn').addEventListener('click', () => { show('claims'); $('#cKid').value = S.kid; claimPreview(); $('#fOne').scrollIntoView({ block: 'start' }); });
+// A sealant of this permanent tooth is recorded lost or partial (Code A 0, 1, 7) by an attended exam dated after the
+// previous sealant and on or before this one: the only case where the project pays a reseal (D-77, v_services_pay).
+const sealLost = (u, kid, tooth, prev, upTo) => u.exams.some(e => {
+  const d = fromInput(e.exam_date), t = e.teeth && e.teeth[tooth];
+  return e.study_id === kid && e.attended && d > prev && d <= upTo && t && t.t === 'p' && [0, 1, 7].includes(+t.A);
+});
 // Duplicate checks from v0.7 shown as notes; payable amounts follow the fee schedule (research team, v1.2).
 function txFlags(u) {
-  const out = new Map(), seen = {};
+  const out = new Map(), seen = {}, lastSeal = {};
   const bump = key => (seen[key] = (seen[key] || 0) + 1);
   for (const tx of [...u.tx].sort((a, b) => a.date - b.date || a.id - b.id)) {
     const notes = [];
@@ -1636,11 +1643,16 @@ function txFlags(u) {
     if (kc && kc.coverage === 'none') notes.push('ไม่มีสิทธิรัฐ: ไม่เบิก สปสช. โครงการจ่ายเต็มอัตรา');
     if (kc && !kc.coverage) notes.push('ยังไม่ระบุสิทธิการรักษา');
     if (tx.kid && tx.code === '170') {
-      if (u.arm === 'control' ? bump(`170|${tx.kid}|${tx.date.getFullYear()}`) > 1 : bump(`170|${tx.kid}|${tx.date.getFullYear()}-${tx.date.getMonth()}`) > 1)
-        notes.push(u.arm === 'control' ? 'ฟลูออไรด์เกินปีละ 1 ครั้ง (เงื่อนไข สปสช. รอยืนยัน)' : 'ฟลูออไรด์เกินเดือนละ 1 ครั้ง');
+      if (u.arm === 'control' ? bump(`170|${tx.kid}|${fyOf(tx.date)}`) > 1 : bump(`170|${tx.kid}|${tx.date.getFullYear()}-${tx.date.getMonth()}`) > 1)
+        notes.push(u.arm === 'control' ? 'ฟลูออไรด์เกินปีงบละ 1 ครั้ง' : 'ฟลูออไรด์เกินเดือนละ 1 ครั้ง');
     }
-    if (tx.kid && tx.code === '171' && bump(`171|${tx.kid}|${tx.tooth}`) > 1) notes.push('ซี่นี้เคลือบแล้ว เคลือบซ้ำเมื่อผลตรวจพบว่าหลุดหรือเหลือบางส่วน');
-    if (tx.kid && tx.code === '176' && bump(`176|${tx.kid}|${tx.date.getFullYear()}`) > 1) notes.push('ชุดอุปกรณ์ปีละ 1 ครั้ง ฝึกซ้ำใช้รหัส 175');
+    if (tx.kid && tx.code === '171' && tx.tooth && !isPrimNo(tx.tooth)) {
+      const key = `${tx.kid}|${tx.tooth}`;
+      if (u.arm === 'control' && bump(`171|${key}|${fyOf(tx.date)}`) > 1) notes.push('เคลือบซี่นี้เกินปีงบละ 1 ครั้ง');
+      else if (lastSeal[key] && !sealLost(u, tx.kid, tx.tooth, lastSeal[key], tx.date)) notes.push('ซี่นี้เคลือบแล้ว เคลือบซ้ำเมื่อผลตรวจพบว่าหลุดหรือเหลือบางส่วน');
+    }
+    if (tx.kid && (tx.code === '171' || tx.code === '172') && tx.tooth) lastSeal[`${tx.kid}|${tx.tooth}`] = tx.date;
+    if (tx.kid && tx.code === '176' && bump(`176|${tx.kid}|${fyOf(tx.date)}`) > 1) notes.push('ชุดอุปกรณ์ปีงบละ 1 ครั้ง ฝึกซ้ำใช้รหัส 175');
     if (tx.kid && tx.code === '67210' && !isPrimNo(tx.tooth) && kc && u.byId[tx.kid].teeth && !fillFlagged(u.byId[tx.kid], tx.tooth)) notes.push('ซี่นี้ผลตรวจครั้งแรกไม่ได้ระบุว่าต้องบูรณะ');
     out.set(tx.id, notes);
   }
@@ -1720,6 +1732,14 @@ function claimPreview() {
   if (u.arm !== 'cap') pv.append(el('div', { class: 'note', text: 'ยอดที่โครงการจ่ายจริง (หักส่วนที่เบิกจาก สปสช. แล้ว) ขึ้นในรายการด้านล่างหลังบันทึก' }));
   if (isPrimNo(tooth)) pv.append(el('div', { class: 'note', text: 'ฟันน้ำนม: บันทึกเป็นผลงาน ไม่นับในงบโครงการ' }));
   if (code === '67210' && !isPrimNo(tooth)) pv.append(el('div', { class: 'note', text: 'อุดฟันเบิกได้ซี่ละ 1 ด้าน (360 บาท) ถ้าต้องอุดมากกว่า 1 ด้าน แนะนำส่งรักษาที่ศูนย์บริการ' + (tooth && !fillFlagged(k, tooth) ? ' · ซี่นี้ผลตรวจครั้งแรกไม่ได้ระบุว่าต้องบูรณะ' : '') }));
+  // Repeats the project does not pay (D-77), said before saving; the ledger shows the same reason under the amount.
+  const pays = u.arm !== 'cap' ? ' โครงการไม่จ่าย' : '', kt = u.txByKid[k.id] || [];
+  if (code === '176' && kt.some(t => t.code === '176' && fyOf(t.date) === fyOf(d))) pv.append(el('div', { class: 'note', text: `ได้ชุดอุปกรณ์แล้วในปีงบนี้${u.arm === 'ffs' ? ' โครงการไม่จ่ายชุดที่ 2' : ''} ฝึกซ้ำให้เลือก "ฝึกแปรงฟันรายบุคคล" (175)` }));
+  if (code === '171' && tooth && !isPrimNo(tooth)) {
+    const prev = kt.filter(t => (t.code === '171' || t.code === '172') && t.tooth === tooth && t.date <= d).sort((a, b) => b.date - a.date)[0];
+    if (u.arm === 'control' && kt.some(t => t.code === '171' && t.tooth === tooth && fyOf(t.date) === fyOf(d))) pv.append(el('div', { class: 'note', text: `ซี่นี้เคลือบแล้วในปีงบนี้ เคลือบได้ปีงบละ 1 ครั้งตามข้อกำหนด สปสช.${pays}ซ้ำ` }));
+    else if (prev && !sealLost(u, k.id, tooth, prev.date, d)) pv.append(el('div', { class: 'note', text: `ซี่นี้เคลือบแล้วเมื่อ ${thShort(prev.date)} เคลือบซ้ำเมื่อผลตรวจบันทึกว่าหลุดหรือเหลือบางส่วน${pays ? ' ถ้ายังไม่มีผลตรวจนั้น' + pays : ''}` }));
+  }
   if (PLACE_CODES.includes(code) && $('#cPlace') && $('#cPlace').value === 'clinic') pv.append(el('div', { class: 'note', text: 'ทำที่ศูนย์บริการ: บันทึกเป็นผลงาน โครงการไม่จ่าย เบิกกองทุนทันตกรรม สปสช. ตามปกติ' }));
   if (code === '170' && k.c.allergy_colophony) pv.append(el('div', { class: 'hint', text: 'นักเรียนคนนี้แพ้โคโลโฟนี ระวังฟลูออไรด์วาร์นิช' }));
 }
@@ -1815,16 +1835,18 @@ function groupPreview() {
   const pv = $('#gPreview'); pv.replaceChildren();
   const line = (label, value) => el('div', { class: 'pl' }, el('span', { class: 'muted', text: label }), el('b', { text: value }));
   if (!n) { pv.append(el('span', { class: 'muted', text: 'กด "ทำให้ทุกคน" แล้วเอารหัสของคนที่ขาดออก หรือเลือกทีละคน' })); return; }
-  const had = code === '176' ? [...S.gsel].filter(id => (u.txByKid[id] || []).some(t => t.code === '176' && t.date.getFullYear() === TODAY.getFullYear())).length : 0;
+  const gd = fromInput($('#gDate').value) || TODAY;
+  const had = code === '176' ? [...S.gsel].filter(id => (u.txByKid[id] || []).some(t => t.code === '176' && fyOf(t.date) === fyOf(gd))).length : 0;
   if (PRICE[code] && PRICE[code].group === 'session') pv.append(line('จะบันทึก', `1 รายการ (นับต่อครั้ง) · ผู้เข้าร่วม ${n} คน`), line('อัตราค่าบริการ', `${fmt2(price)} บาท`));
   else pv.append(line('จะบันทึก', `${n} รายการ (นับต่อคน) · ผูกกับแฟ้มของแต่ละคน`), line('อัตราค่าบริการ', `${fmt2(price)} × ${n} = ${fmt2(price * n)} บาท`));
-  if (had) pv.append(el('div', { class: 'note', text: `${had} คนได้ชุดอุปกรณ์แล้วปีนี้ ฝึกซ้ำให้เลือก "ฝึกแปรงฟันรายบุคคล" (175)` }));
+  if (had) pv.append(el('div', { class: 'note', text: `${had} คนได้ชุดอุปกรณ์แล้วในปีงบนี้${u.arm === 'ffs' ? ' โครงการไม่จ่ายชุดที่ 2' : ''} ฝึกซ้ำให้เลือก "ฝึกแปรงฟันรายบุคคล" (175)` }));
   if (code === '176' || code === '175') pv.append(el('div', { class: 'note', text: 'ช่อง "ฝึกแปรงฟัน" ในแผนของทุกคนที่เลือกจะติ๊กให้อัตโนมัติ' }));
 }
 $('#gAll').addEventListener('click', () => { groupKids().forEach(k => S.gsel.add(k.id)); renderGroupList(); });
 $('#gNone').addEventListener('click', () => { S.gsel.clear(); renderGroupList(); });
 // The topic is a placeholder, not a value, so a session is never saved under a topic nobody typed (R1-20).
 $('#gCode').addEventListener('change', () => { $('#gTopic').placeholder = topicHint($('#gCode').value); renderGroupList(); });
+$('#gDate').addEventListener('change', groupPreview);
 $('#gMin').addEventListener('input', e => e.target.classList.remove('is-missing'));
 $('#fGroup').addEventListener('submit', async e => {
   e.preventDefault();
@@ -2031,7 +2053,7 @@ function reviewSection(ids) {
     sub.length ? el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
       el('thead', {}, el('tr', {}, ...['วันที่', 'หน่วย', 'นักเรียน', 'บริการ', 'ซี่', 'ยอดจ่าย', ''].map((h, i) => el('th', { scope: 'col', class: i === 5 ? 'num' : '', text: h })))), tb))
       : el('p', { class: 'small muted', text: 'ไม่มีรายการรอตรวจ' }),
-    el('p', { class: 'small muted', text: 'ยอดจ่ายคิดตามอัตราค่าบริการ 01–03: บริการที่ สปสช. จ่ายก่อน (ตรวจ 174 ฟลูออไรด์ 170 ปีงบละครั้ง เคลือบหลุมร่องฟัน 2 ซี่แรก) โครงการจ่ายส่วนต่าง เด็กไม่มีสิทธิรัฐจ่ายเต็มอัตรา อุดฟันและ PRR จ่ายเฉพาะบนรถทันตกรรม (กลุ่มควบคุมจ่ายอุดฟันบนรถ ไม่จ่าย PRR) ฟันน้ำนมไม่นับ' }));
+    el('p', { class: 'small muted', text: 'ยอดจ่ายคิดตามอัตราค่าบริการ 01–03: บริการที่ สปสช. จ่ายก่อน (ตรวจ 174 ฟลูออไรด์ 170 ปีงบละครั้ง เคลือบหลุมร่องฟัน 2 ซี่แรก) โครงการจ่ายส่วนต่าง เด็กไม่มีสิทธิรัฐจ่ายเต็มอัตรา อุดฟันและ PRR จ่ายเฉพาะบนรถทันตกรรม (กลุ่มควบคุมจ่ายอุดฟันบนรถ ไม่จ่าย PRR) ฟันน้ำนมไม่นับ ชุดอุปกรณ์แปรงฟัน (176) ปีงบละครั้ง เคลือบซ้ำซี่เดิมจ่ายเมื่อผลตรวจบันทึกว่าหลุดหรือเหลือบางส่วน กลุ่มควบคุมเคลือบซี่เดิมได้ปีงบละครั้ง' }));
 }
 // Money per unit, cohort status and the van-filling setting, for the research team.
 function moneyTable(ids) {
