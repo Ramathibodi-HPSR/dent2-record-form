@@ -173,6 +173,12 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const i2d = (p2d.data || []).map(r => r.id), q2d = await pay(C, i2d), n2d = await notes(C, i2d);
   ok(i2d.map(id => q2d[id]).join() === '0,0,0' && /ซี่ที่ 2/.test(n2d[i2d[2]]),
     'D-77: a refused reseal does not use up a tooth NHSO covers (26 is still the 2nd, claimed from NHSO)', JSON.stringify(i2d.map(id => [q2d[id], n2d[id]])));
+  const m6 = { ...exam, study_id: kc2, unit_id: 'public-ffs', round: 'm6', exam_date: '2026-11-02', place: 'school', examiner_code: 'TEST-C1', teeth: mouth() };
+  const m6a = await C.from('exams').insert(m6).select('id').single(), m6b = await C.from('exams').insert(m6).select('id').single();
+  ok(!m6a.error && !!m6b.error, 'follow-up exams (v1.3): a unit saves a 6-month exam; a second one for the same child is refused', m6a.error ? m6a.error.message : '');
+  const lostX = await C.from('exams').insert({ ...m6, round: 'recall', teeth: mouth({ 16: { A: 7, lost: 's' }, 26: { A: 7, lost: 'r' } }) }).select('id').single();
+  const lostS = lostX.data ? (await C.from('v_exam_summary').select('"F"').eq('exam_id', lostX.data.id).single()).data : null;
+  ok(!lostX.error && lostS && lostS.F === 1, 'D-78: Code A 7 with 7s (sealant lost) is not a filling in DMFT; 7r is', lostX.error ? lostX.error.message : JSON.stringify(lostS));
 
   console.log('fee schedule 03 (control, A)');
   const A = await login('public-control');
@@ -200,8 +206,11 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   ok(!!dB.error, "another unit cannot delete C's child");
   const dR = await RS.rpc('delete_child', { p_study_id: kd });
   ok(!!dR.error, 'the research team cannot delete a child');
+  const kdx = await C.from('exams').insert({ ...exam, study_id: kd, unit_id: 'public-ffs', examiner_code: 'TEST-C1', teeth: mouth(), fl_override: 6 }).select('id').single();
   const sc = await C.rpc('submit_cohort');
   ok(!sc.error && sc.data, 'unit submits its cohort', sc.error && sc.error.message);
+  const flLocked = kdx.data ? await C.from('exams').update({ fl_override: 3 }).eq('id', kdx.data.id).select() : { error: { message: 'no exam' } };
+  ok(!kdx.error && !!flLocked.error && /ฟลูออไรด์/.test(flLocked.error.message), 'D-78: after the cohort, the fluoride interval of the first exam is fixed', (kdx.error || {}).message || (flLocked.error ? '' : 'update went through'));
   const dLocked = await C.rpc('delete_child', { p_study_id: kd });
   ok(!!dLocked.error && /cohort/.test(dLocked.error.message), 'after the cohort, deleting is refused', dLocked.error && dLocked.error.message);
   const vLocked = await C.rpc('set_van_fills', { p_fills: true });

@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=1.2.5">
-<link rel="stylesheet" href="app.css?v=1.2.5">
+<link rel="stylesheet" href="style.css?v=1.3.0">
+<link rel="stylesheet" href="app.css?v=1.3.0">
 </head>
 <body>
 <header class="topbar">
@@ -22,7 +22,7 @@
       <button class="btn btn--ghost" type="button" id="logoutBtn">ออกจากระบบ</button>
     </span>
     <a class="btn btn--ghost guide-link" href="guide.html" target="_blank" rel="noopener">คู่มือ</a>
-    <span class="draft" id="verTag">v1.2</span>
+    <span class="draft" id="verTag">v1.3</span>
   </div>
   <nav class="wrap tabs" id="tabs" role="tablist" aria-label="หน้าจอ" hidden></nav>
 </header>
@@ -138,9 +138,9 @@
     <div id="examStart"></div>
     <div id="examBody" class="fpanel">
       <section>
-        <h3>การตรวจครั้งนี้</h3>
+        <h3 id="examTitle">การตรวจครั้งนี้</h3>
         <div class="grid g4">
-          <label class="field">การตรวจ<select id="vRound"><option value="baseline">ครั้งที่ 1 (ครั้งแรก)</option><option value="m6" disabled>ครั้งที่ 2 (6 เดือน) · เปิดใช้ภายหลัง</option><option value="m12" disabled>ครั้งที่ 3 (12 เดือน) · เปิดใช้ภายหลัง</option></select></label>
+          <label class="field">การตรวจ<select id="vRound"><option value="baseline">ครั้งที่ 1 (ครั้งแรก)</option></select></label>
           <label class="field">วันที่ตรวจ<input id="vDate" type="date"></label>
           <label class="field">รหัสผู้ตรวจ (ผ่านการปรับมาตรฐาน)<select id="vExam"></select></label>
           <label class="field">สถานที่<select id="vPlace"><option value="van">รถทันตกรรมที่โรงเรียน</option><option value="school">ที่โรงเรียน</option><option value="clinic">ที่หน่วยบริการ</option></select></label>
@@ -156,7 +156,7 @@
         </div>
       </section>
 
-      <section>
+      <section id="riskSec">
         <div class="row between"><h3>ส่วนที่ 1 · ประเมินความเสี่ยงฟันผุ (อายุ 6–12 ปี)</h3><span id="riskChip"></span></div>
         <div class="tablewrap">
           <table class="risk"><tbody id="riskBody"></tbody>
@@ -177,6 +177,7 @@
           <button class="btn btn--ghost" type="button" id="presetBtn">ตั้งค่าเริ่มต้น: ช่องปากเด็ก 7 ปีปกติ</button>
         </div>
         <p class="small muted">แตะเลขซี่เพื่อวงกลมซี่ที่พบ (บน: ฟันน้ำนม · ล่าง: ฟันแท้ แตะซ้ำเพื่อยกเลิก) แตะกล่องรหัสเพื่อแก้ Code A · Code B · ความต้องการการรักษา ป้าย "ผุ" ขึ้นเองเมื่อ ICDAS ≥3</p>
+        <div class="card stack" id="sealRet" hidden></div>
         <div class="chartwrap">
           <p class="arch-label">ขากรรไกรบน (ขวาของเด็ก → ซ้ายของเด็ก)</p>
           <div class="arch" id="archU"></div>
@@ -192,6 +193,7 @@
           <span><i class="lsw high"></i>ICDAS 5–6</span>
           <span><i class="lsw none"></i>ยังไม่ขึ้น / ไม่มีฟัน</span>
         </div>
+        <div class="card" id="chartOkBox" hidden></div>
         <div class="card" id="editor"></div>
       </section>
 
@@ -336,7 +338,7 @@
 <div class="tip-float" id="ftip" role="tooltip" hidden></div>
 
 <script src="vendor/supabase.js"></script>
-<script src="config.js?v=1.2.5"></script>
-<script src="app.js?v=1.2.5"></script>
+<script src="config.js?v=1.3.0"></script>
+<script src="app.js?v=1.3.0"></script>
 </body>
 </html>

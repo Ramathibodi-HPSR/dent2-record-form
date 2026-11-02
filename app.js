@@ -116,6 +116,7 @@ const STATUS = {
   recorded: { th: 'บันทึกแล้ว', c: 'var(--text-muted)' },
 };
 const PLACE = { van: 'รถทันตกรรมที่โรงเรียน', school: 'ที่โรงเรียน', clinic: 'ที่หน่วยบริการ' };
+const ROUND_TH = { baseline: 'ตรวจครั้งแรก', recall: 'ตรวจซ้ำตามนัด', m6: 'ตรวจรอบโครงการ 6 เดือน', m12: 'ตรวจรอบโครงการ 12 เดือน', urgent: 'ตรวจเร่งด่วน' };
 
 /* ================================================================ teeth (final form: 12 positions per jaw) */
 const UPPER = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
@@ -206,10 +207,69 @@ function buildPlan(k) {
       teethRows.push({ ...base, key: `tx-${no}`, code: 'REF', codes: ['REF'], label: 'ส่งต่อ', sub: 'ทันตแพทย์เฉพาะทาง / โรงพยาบาล · นอกงบโครงการ', urgent: true });
     }
   }
+  if (ku) teethRows.push(...fuRows(ku, k));
   if (urgent && !teethRows.some(r => r.code === 'REF')) teethRows.push({ key: 'tx-urg', code: 'REF', codes: ['REF'], tooth: null, anytime: true, label: 'ส่งต่อ อาการเร่งด่วน', sub: 'ปวด เสียว บวม หนอง หรือฟันแท้ผุขนาดใหญ่', urgent: true });
   teethRows.sort((a, b) => (a.prim ? 1 : 0) - (b.prim ? 1 : 0));
   return [...rows, ...teethRows];
 }
+
+// Exams of one child, oldest first. Follow-up exams (v1.3) sit beside the first exam in unit.exams.
+const kidExams = (u, id) => u.exams.filter(e => e.study_id === id)
+  .sort((a, b) => a.exam_date.localeCompare(b.exam_date) || String(a.created_at).localeCompare(String(b.created_at)));
+const putExam = (u, row) => { const i = u.exams.findIndex(e => e.id === row.id); if (i >= 0) u.exams[i] = row; else u.exams.push(row); };
+// The latest attended exam before ex, or the latest of all when ex is null.
+function prevExam(u, id, ex) {
+  const xs = kidExams(u, id).filter(e => e.attended && (!ex || e.id !== ex.id));
+  const before = ex ? xs.filter(e => e.exam_date < ex.exam_date || (e.exam_date === ex.exam_date && String(e.created_at) < String(ex.created_at))) : xs;
+  return before[before.length - 1] || null;
+}
+// Permanent teeth sealed before an exam: a sealant at the previous exam (Code A 1 or 2), or a 171/172 up to upTo.
+const sealPositions = (u, k, teeth, prev, upTo) => POS.filter(p => teeth[p] && teeth[p].t === 'p'
+  && ((prev && prev.teeth[p] && prev.teeth[p].t === 'p' && [1, 2].includes(+prev.teeth[p].A))
+    || (u.txByKid[k.id] || []).some(x => (x.code === '171' || x.code === '172') && x.tooth === p && x.date <= upTo)));
+// Teeth present now: the latest attended exam (a follow-up can find a newly erupted first molar), else the first exam.
+function lastTeeth(k) {
+  const u = S.units[k.unit], e = u ? kidExams(u, k.id).filter(x => x.attended).pop() : null;
+  return e && e.teeth ? e.teeth : k.teeth;
+}
+// Plan items from follow-up exams (v1.3), apart from the round-1 plan and budget, done by a 171 (or 172) on or after
+// the exam that opened them:
+// - a re-seal where an exam records a sealant lost or partial (Code A 0, 1, 7) on a first molar sealed before it, the
+//   same test the project pays a re-seal by (D-77);
+// - a first sealant for a first molar that a follow-up finds needing one and the first exam's plan lacks.
+// An open item stays through later exams; one that records the sealant full closes it unless it is done.
+function fuRows(u, k) {
+  const xs = kidExams(u, k.id).filter(e => e.attended);
+  if (xs.length < 2) return [];
+  const txs = (u.txByKid[k.id] || []).filter(x => x.code === '171' || x.code === '172'), open = {};
+  const doneFrom = (p, o) => txs.some(x => x.tooth === p && x.date >= o.from && (!o.reseal || x.code === '171'));
+  const inPlan = p => k.teeth && k.teeth[p] && k.teeth[p].t === 'p' && needOf(p, k) === 2;
+  for (let i = 1; i < xs.length; i++) {
+    const e = xs[i];
+    if (e.round === 'baseline') continue;
+    const d = fromInput(e.exam_date), before = sealPositions(u, k, e.teeth, xs[i - 1], addDays(d, -1));
+    for (const p of FPM) {
+      const t = e.teeth && e.teeth[p], cur = open[p];
+      if (!t || t.t !== 'p') continue;
+      if (before.includes(p) && [0, 1, 7].includes(+t.A)) { if (!cur || doneFrom(p, cur)) open[p] = { reseal: true, from: d, e, A: +t.A }; }
+      else if (+t.A === 2) { if (cur && !doneFrom(p, cur)) delete open[p]; }
+      else if (!cur && t.need === 2 && !inPlan(p) && !txs.some(x => x.tooth === p)) open[p] = { reseal: false, from: d, e, occ: t.occ ?? t.B };
+    }
+  }
+  return Object.entries(open).map(([pp, o]) => {
+    const p = +pp, when = `${ROUND_TH[o.e.round] || o.e.round} ${thShort(o.from)}`;
+    const last = txs.filter(x => x.tooth === p && x.code === '171' && x.date < o.from).pop();
+    const did = txs.find(x => x.tooth === p && x.code === '171' && x.date >= o.from);
+    // Control (03): one sealant per tooth per NHSO year, so a re-seal in the same year as the last is not paid (D-77)
+    const ctl = u.arm === 'control' && last && fyOf(last.date) === fyOf(did ? did.date : TODAY) ? ' · กลุ่มควบคุม: ปีงบเดียวกับการเคลือบครั้งก่อน โครงการไม่จ่าย' : '';
+    return o.reseal
+      ? { key: `reseal-${p}`, code: '171', codes: ['171'], tooth: p, anytime: true, from: o.from, fu: true, reseal: true, label: 'เคลือบหลุมร่องฟันซ้ำ',
+        sub: `${when}: สารเคลือบ${o.A === 1 ? 'เหลือบางส่วน' : 'หลุด'} · รายการจากผลตรวจติดตาม${ctl}` }
+      : { key: `fuseal-${p}`, code: '171', codes: o.occ === 3 ? ['171', '172'] : ['171'], tooth: p, anytime: true, from: o.from, fu: true, label: 'เคลือบหลุมร่องฟัน',
+        sub: `${when}: ผลตรวจติดตามพบว่าต้องเคลือบ · รายการจากผลตรวจติดตาม` };
+  });
+}
+const studyExam = (u, k, m) => u.exams.find(e => e.study_id === k.id && e.attended && e.round === (m === 6 ? 'm6' : 'm12'));
 
 /* ================================================================ money: Table 1 value of a service */
 // Table 1 rate of the unit's fee schedule (no LC for ศบส. and control, 100% LC for private trial arms). Primary
@@ -230,7 +290,7 @@ const NHSO_FLAT = 700;
 function childBudget(u, k) {
   let plan = 0, fillN = 0;
   for (const r of buildPlan(k)) {
-    if (r.study || r.prim) continue;
+    if (r.study || r.prim || r.fu) continue;
     if (r.key === 'exam') plan += rateOf(u, '174') * r.months.length;
     else if (r.key === 'fl') plan += rateOf(u, '170') * r.months.length;
     else if (r.key === 'brush') plan += rateOf(u, '176');
@@ -267,10 +327,13 @@ const transferred = u => (u.transfers || []).reduce((a, t) => a + +t.amount, 0);
 const CAT = { '171': 'seal', '172': 'seal', '170': 'fl', '174': 'recall', '173': 'recall', '176': 'brush', '175': 'brush', 'REF': 'ref' };
 const CAT_TH = { seal: 'เคลือบหลุมร่องฟัน', fl: 'ฟลูออไรด์', recall: 'ตรวจติดตาม', tx: 'รักษา', ref: 'ส่งต่อ (ยังไม่ส่งหรือรอผล)', brush: 'ฝึกแปรงฟัน', exam: 'ยังไม่ได้ตรวจ', none: 'ครบตามแผนถึงเดือนนี้' };
 const catOf = row => CAT[row.code] || 'tx';
-const rowTx = (u, k, row) => (u.txByKid[k.id] || []).filter(t => row.codes.includes(t.code) && (row.tooth == null || t.tooth === row.tooth));
+// A row from a follow-up exam counts services from its exam date; a first-exam row leaves out the follow-up items.
+const rowTx = (u, k, row) => (u.txByKid[k.id] || []).filter(t => row.codes.includes(t.code) && (row.tooth == null || t.tooth === row.tooth)
+  && (row.from ? t.date >= row.from : !/^(reseal|fuseal)-/.test(t.planKey || '')));
 const pname = code => (PRICE[code] ? PRICE[code].name : code);
 const pshort = code => (PRICE[code] ? PRICE[code].short : code);
 const chipText = (row, m) => {
+  if (row.fu) return `${row.reseal ? 'เคลือบซ้ำ' : 'เคลือบ'} ${row.tooth}`;
   const c = catOf(row);
   if (c === 'seal') return `เคลือบ ${row.tooth}`;
   if (c === 'fl') return `ฟลูออไรด์ ด.${m}`;
@@ -290,7 +353,7 @@ function kidState(u, k) {
     if (row.anytime) {
       total++;
       if (txs.length) { done++; if (txs.some(t => t.code === 'REF' && !t.outcome)) { refWait = true; cats.add('ref'); } }
-      else { const late = (TODAY - k.base) / 864e5 > 30; (late ? miss : due).push({ c: catOf(row), t: chipText(row) }); cats.add(catOf(row)); }
+      else { const late = (TODAY - (row.from || k.base)) / 864e5 > 30; (late ? miss : due).push({ c: catOf(row), t: chipText(row) }); cats.add(catOf(row)); }
       continue;
     }
     for (const m of row.months) {
@@ -306,12 +369,14 @@ const stFlags = st => ({ absent: st.absent, miss: st.miss.length > 0, due: st.du
 
 /* ================================================================ data: load and map */
 const S = {
-  me: null, units: {}, acct: null, tab: 'home', kid: null, ftab: 'exam', sel: 16, prov: '', editId: null, newId: null, gsel: new Set(), loadedAt: 0, enBatch: [],
+  me: null, units: {}, acct: null, tab: 'home', kid: null, fu: null, ftab: 'exam', sel: 16, prov: '', editId: null, newId: null, gsel: new Set(), loadedAt: 0, enBatch: [],
   kf: { q: '', cls: 'all', risk: 'all', st: 'all', miss: 'all', group: 'cls' },
   lf: { month: 'all', status: 'all', kind: 'all', q: '', limit: 40 },
 };
 const unit = () => S.units[S.acct];
 const curKid = () => (unit() ? unit().byId[S.kid] : null);
+// The exam open in the exam tab: the child's first exam (the child itself) or a follow-up exam (S.fu, v1.3).
+const exK = () => (S.fu && S.fu.kid === curKid() ? S.fu : curKid());
 const hasConsent = k => !!(k.c.consent_on && k.c.assent);
 // Per-child services need complete consent and an enrolled (not withdrawn) child (R1-20).
 const canServe = k => hasConsent(k) && k.c.status !== 'withdrawn';
@@ -353,7 +418,7 @@ function txFrom(s) {
 }
 const clone = o => JSON.parse(JSON.stringify(o || {}));
 function applyExam(k, ex) {
-  k.exam = ex || null; k.dirty = false; k.editing = false;
+  k.exam = ex || null; k.dirty = false; k.editing = false; k.unlock = false;
   k.status = !ex ? 'new' : ex.attended ? 'examined' : 'absent';
   k.base = ex && ex.attended ? fromInput(ex.exam_date) : null;
   k.examDate = ex ? fromInput(ex.exam_date) : null;
@@ -500,11 +565,11 @@ async function afterLogin() {
     ps.classList.toggle('is-missing', !S.prov);
     $('#provBox').hidden = false;
     S.kid = null;   // the file tab waits for a chosen child (R1-19)
-    $('#verTag').textContent = u.is_test ? 'v1.2 · หน่วยทดสอบ' : 'v1.2';
+    $('#verTag').textContent = u.is_test ? 'v1.3 · หน่วยทดสอบ' : 'v1.3';
   } else {
     fill(chip, el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
     $('#provBox').hidden = true;
-    $('#verTag').textContent = 'v1.2';
+    $('#verTag').textContent = 'v1.3';
   }
   $('#acctBox').hidden = false;
   show(S.me.role === 'unit' ? 'home' : 'research');
@@ -522,9 +587,9 @@ async function logout(reason) {
   // One login per unit (D-42): the next person on this device picks their own code.
   if (S.acct && S.acct !== 'research') lsSet('dent2-prov-' + S.acct, '');
   await sb.auth.signOut();
-  Object.assign(S, { me: null, units: {}, acct: null, kid: null, editId: null, prov: '' });
+  Object.assign(S, { me: null, units: {}, acct: null, kid: null, fu: null, editId: null, prov: '' });
   $('#tabs').hidden = true; $('#acctBox').hidden = true; hideSaveBar();
-  $('#verTag').textContent = 'v1.2';
+  $('#verTag').textContent = 'v1.3';
   show('login');
   if (reason) $('#lgMsg').replaceChildren(el('div', { class: 'hint', text: reason }));
 }
@@ -534,7 +599,7 @@ $('#logoutBtn').addEventListener('click', () => { if (dirtyGuard()) logout(); })
 let reloading = false;
 async function reloadData(auto) {
   if (!S.me || reloading || busy) return;
-  const k = curKid();
+  const k = exK();
   if (auto ? k && k.dirty : !dirtyGuard()) return;
   reloading = true;
   setIf('#reloadBtn', 'disabled', true);
@@ -542,6 +607,7 @@ async function reloadData(auto) {
     TODAY = startOfDay(new Date());
     await loadAll();
     S.loadedAt = Date.now();
+    if (S.fu) { const kid = curKid(), ex = S.fu.exam && unit().exams.find(e => e.id === S.fu.exam.id); S.fu = kid && ex ? fuOpen(kid, ex) : null; }
     if (S.tab !== 'enrol') render(S.tab, true);   // a half-filled enrolment form keeps its values
     if (!auto) toast('โหลดข้อมูลล่าสุดแล้ว');
   } catch (e) { if (!auto) toast('โหลดข้อมูลไม่สำเร็จ · ' + errText(e)); }
@@ -566,7 +632,7 @@ function idleCheck() {
   if (idle > 30 * 60e3) { idleWarned = false; logout('ออกจากระบบอัตโนมัติ เพราะไม่มีการใช้งาน 30 นาที ผลตรวจที่ยังไม่กดบันทึกจะไม่ถูกเก็บ'); return true; }
   if (idle > 25 * 60e3 && !idleWarned) {
     idleWarned = true;
-    const k = curKid();
+    const k = exK();
     toast(`ไม่มีการใช้งาน 25 นาที ระบบจะออกจากระบบใน 5 นาที แตะหน้าจอเพื่อใช้งานต่อ${k && k.dirty ? ' (มีผลตรวจที่ยังไม่บันทึก)' : ''}`, 0);
   }
   return false;
@@ -574,11 +640,11 @@ function idleCheck() {
 setInterval(idleCheck, 30e3);
 
 function dirtyGuard() {
-  const k = curKid();
+  const k = exK();
   if (k && k.dirty) return confirm('มีผลตรวจที่ยังไม่บันทึก ออกจากหน้านี้โดยไม่บันทึกหรือไม่?') && (discardExam(k), true);
   return true;
 }
-window.addEventListener('beforeunload', e => { const k = curKid(); if (k && k.dirty) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { const k = exK(); if (k && k.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 function show(id) {
   if (!S.me) id = 'login';
@@ -598,7 +664,7 @@ function render(id, keep) {
   else if (id === 'claims') { setupClaimsForm(keep); renderClaims(); }
   else if (id === 'research') renderResearch();
 }
-function openKid(id, ft) { if (S.kid !== id && !dirtyGuard()) return; S.kid = id; S.sel = 16; if (ft) S.ftab = ft; show('file'); }
+function openKid(id, ft) { if (S.kid !== id && !dirtyGuard()) return; if (S.kid !== id) S.fu = null; S.kid = id; S.sel = 16; if (ft) S.ftab = ft; show('file'); }
 document.addEventListener('click', e => {
   const g = e.target.closest('[data-go]'); if (g) { if (g.dataset.go === 'enrol') S.editId = null; show(g.dataset.go); return; }
   const f = e.target.closest('[data-ft]'); if (f) { S.ftab = f.dataset.ft; renderFile(); }
@@ -793,12 +859,13 @@ function renderHome() {
 /* ================================================================ STUDENTS: cards */
 function fpmMap(u, k) {
   const box = el('span', { class: 'fpm', 'aria-label': 'ฟันกรามแท้ซี่ที่หนึ่ง' });
+  const todo = fuRows(u, k).filter(r => !rowTx(u, k, r).length), reseal = todo.filter(r => r.reseal).map(r => r.tooth), lt = k.teeth ? lastTeeth(k) : null;
   for (const p of [16, 26, 46, 36]) {
-    const t = k.teeth ? k.teeth[p] : null;
+    const t = lt ? lt[p] : null;
     let cls = 'f-none', lab = 'ยังไม่ขึ้น';
     if (t && t.t === 'p') {
       const sealed = t.A === 2 || (u.txByKid[k.id] || []).some(x => (x.code === '171' || x.code === '172') && x.tooth === p);
-      if (t.B >= 3 && !sealed) { cls = 'f-car'; lab = 'ผุ'; } else if (sealed) { cls = 'f-seal'; lab = 'เคลือบแล้ว'; } else { cls = 'f-need'; lab = 'ต้องเคลือบ'; }
+      if (t.B >= 3 && !sealed) { cls = 'f-car'; lab = 'ผุ'; } else if (reseal.includes(p)) { cls = 'f-need'; lab = 'ต้องเคลือบซ้ำ'; } else if (sealed) { cls = 'f-seal'; lab = 'เคลือบแล้ว'; } else { cls = 'f-need'; lab = 'ต้องเคลือบ'; }
     }
     box.append(el('span', { class: cls, title: `${p} ${lab}`, text: String(p) }));
   }
@@ -976,7 +1043,7 @@ $('#enForm').addEventListener('submit', async e => {
       done.scrollIntoView({ block: 'start' });
       $('#enSex').focus({ preventScroll: true });
     } else {
-      S.editId = null; S.kid = id; S.ftab = 'exam';
+      S.editId = null; S.kid = id; S.fu = null; S.ftab = 'exam';
       show('file');
     }
   } catch (err) { bad('บันทึกไม่สำเร็จ · ' + errText(err)); }
@@ -1028,7 +1095,7 @@ function renderFileHead() {
     el('div', { class: 'childbar' },
       kv('รหัสนักเรียน', el('span', { class: 'mono big-id', text: k.id })), kv('ชั้น', `${k.cls} · ${school ? school.name : ''}`), kv('เพศ', sexTh(k) || '–'),
       kv(examined(k) ? 'อายุ ณ วันตรวจ' : 'อายุวันนี้', ageText(k, k.base || TODAY)),
-      kv('ความเสี่ยง', examined(k) ? el('span', { class: 'chip ' + LEVEL[lvlOf(k)].chip, text: `${LEVEL[lvlOf(k)].th} (${riskScore(k)})` }) : statusChip(k)),
+      kv(exK() && exK().fu ? 'ความเสี่ยง (ตรวจครั้งแรก)' : 'ความเสี่ยง', examined(k) ? el('span', { class: 'chip ' + LEVEL[lvlOf(k)].chip, text: `${LEVEL[lvlOf(k)].th} (${riskScore(k)})` }) : statusChip(k)),
       kv('ทำตามแผนถึงเดือนนี้', st.absent ? '–' : `${st.done}/${st.total} รายการ`, 'noprint')),
     !hasConsent(k) ? el('div', { class: 'alert', text: '⛔ ยังไม่มีความยินยอมของผู้ปกครองและเด็กครบ จึงบันทึกผลตรวจไม่ได้ กด "แก้ไขข้อมูลลงทะเบียน" เพื่อใส่วันที่ลงนามและติ๊กความยินยอมของเด็ก' }) : null,
     el('details', {}, el('summary', { text: 'ข้อมูลลงทะเบียน' }),
@@ -1050,8 +1117,8 @@ async function deleteChild(k) {
   if (ans.trim() !== k.id) { toast('รหัสไม่ตรง ยังไม่ได้ลบ'); return; }
   const { error } = await sb.rpc('delete_child', { p_study_id: k.id });
   if (error) { toastErr(error); return; }
-  u.kids = u.kids.filter(x => x !== k); delete u.byId[k.id]; u.tx = u.tx.filter(t => t.kid !== k.id); reindex(u);
-  k.dirty = false; k.editing = false; S.kid = null; hideSaveBar();
+  u.kids = u.kids.filter(x => x !== k); delete u.byId[k.id]; u.tx = u.tx.filter(t => t.kid !== k.id); u.exams = u.exams.filter(e => e.study_id !== k.id); reindex(u);
+  k.dirty = false; k.editing = false; S.kid = null; S.fu = null; hideSaveBar();
   toast(`ลบแฟ้ม ${k.id} แล้ว`);
   show('kids');
 }
@@ -1072,13 +1139,139 @@ async function markAbsent(k) {
   const row = { study_id: k.id, unit_id: u.id, round: 'baseline', exam_date: toInput(TODAY), attended: false, examiner_code: S.prov || null };
   const res = k.exam ? await sb.from('exams').update(row).eq('id', k.exam.id).select().single() : await sb.from('exams').insert(row).select().single();
   if (res.error) return toastErr(res.error);
+  putExam(u, res.data);
   applyExam(k, res.data);
   toast(`บันทึกแล้ว · ${k.id} ขาดเรียนวันตรวจ`);
   renderFile();
 }
-function discardExam(k) { applyExam(k, k.exam); hideSaveBar(); }
+function discardExam(k) {
+  if (k.fu) S.fu = k.exam ? fuOpen(k.kid, k.exam) : null;
+  else applyExam(k, k.exam);
+  hideSaveBar();
+}
+/* ---- follow-up exams (v1.3): recall by risk, the 6- and 12-month rounds */
+// A follow-up exam is its own row and has its own editing state, shaped like a child so the exam editor serves both.
+// The first exam stays the base of the care plan and the round-1 budget.
+const fuShell = kid => ({ fu: true, id: kid.id, unit: kid.unit, get c() { return kid.c; }, kid });   // consent edits reach it
+function fuOpen(kid, ex) {
+  const u = unit(), x = fuShell(kid);
+  applyExam(x, ex);
+  x.round = ex.round; x.prev = prevExam(u, kid.id, ex);
+  x.sealPos = sealPositions(u, kid, x.teeth, x.prev, fromInput(ex.exam_date));
+  x.sealOk = new Set(x.sealPos);   // a saved exam has stated them
+  x.chartOk = true;
+  return x;
+}
+// A new follow-up exam starts from the latest exam (D-78): the chart and PI/GI as last time, for the examiner to confirm
+// or change; the risk answers carried, or empty at the 12-month round (assessed once a year); every tooth sealed before
+// is stated full, partial or lost.
+function fuNew(kid, round) {
+  const u = unit(), x = fuShell(kid), prev = prevExam(u, kid.id, null);
+  applyExam(x, prev);
+  Object.assign(x, { exam: null, editing: true, dirty: true, round, prev, examDate: new Date(TODAY), examiner: u.examiners.includes(S.prov) ? S.prov : '',
+    risk: round === 'm12' ? {} : clone(prev.risk), urgent: { pain: false, swell: false, big: false }, needOv: {}, ovReason: {}, flOv: null, chartOk: false });   // PI/GI as last time (D-78)
+  x.sealPos = sealPositions(u, kid, x.teeth, prev, TODAY);
+  const sealedSince = p => (u.txByKid[kid.id] || []).some(t => (t.code === '171' || t.code === '172') && t.tooth === p && t.date > fromInput(prev.exam_date));
+  for (const p of x.sealPos) if (sealedSince(p)) x.teeth[p].A = 2;   // sealed since the last exam: starts as full
+  x.sealOk = new Set();
+  return x;
+}
+// Risk is assessed once a year (D-78): at the first exam and the 12-month round; other follow-ups keep the last answers.
+const needsRisk = x => !x.fu || x.round === 'm12';
+const needsChartOk = x => x.fu && (x.round === 'm6' || x.round === 'm12');
+// What a Code A 7 lost (D-78), read from the previous exam and the services before this one: 's' sealant (7s),
+// 'r' filling (7r), null when the tooth had both and the examiner has to say. On the first exam 7 is a filling.
+function inferLost(k, pos) {
+  if (!k.fu) return 'r';
+  const u = unit(), no = toothNo(pos, k.teeth[pos]), prevA = k.prev && k.prev.teeth[pos] ? +k.prev.teeth[pos].A : null;
+  const txs = (u.txByKid[k.id] || []).filter(t => t.tooth === no && t.date <= (k.examDate || TODAY));
+  const seal = [1, 2].includes(prevA) || txs.some(t => t.code === '171' || t.code === '172');
+  const fill = [3, 4, 5, 6, 8].includes(prevA) || txs.some(t => ['67210', '55', '56', '57'].includes(t.code));
+  return seal && fill ? null : seal ? 's' : 'r';
+}
+const LOST_TH = { s: 'สารเคลือบหลุมร่องฟัน (7s)', r: 'วัสดุอุด (7r)' };
+// Teeth whose presence or codes differ from the exam the follow-up started from.
+const changedTeeth = x => (x.prev ? POS.filter(p => { const a = x.teeth[p], b = x.prev.teeth[p] || {}; return a.t !== b.t || +a.A !== +b.A || (a.B ?? null) !== (b.B ?? null); }).length : 0);
+// The plan month a follow-up of this kind is due in; recall months come from the plan (very high risk: 3 and 9).
+const ROUND_MONTHS = { m6: [5, 6, 7], m12: [11, 12] };
+const planRecall = kid => (buildPlan(kid).find(r => r.key === 'exam') || { months: [1] }).months.length > 1;
+function dueRound(kid) {
+  const m = monthOf(kid.base, TODAY);
+  if (ROUND_MONTHS.m12.includes(m)) return 'm12';
+  if (ROUND_MONTHS.m6.includes(m)) return 'm6';
+  const win = [2, 3, 4].includes(m) ? [2, 3, 4] : [8, 9, 10].includes(m) ? [8, 9, 10] : null;
+  if (!win || !planRecall(kid)) return null;
+  const done = unit().exams.some(e => e.study_id === kid.id && e.attended && e.round === 'recall' && win.includes(monthOf(kid.base, fromInput(e.exam_date))));
+  return done ? null : 'recall';
+}
+const roundTaken = (u, x, r) => (r === 'm6' || r === 'm12') && u.exams.some(e => e.study_id === x.id && e.round === r && (!x.exam || e.id !== x.exam.id));
+function leaveExam() {
+  const cur = exK();
+  if (!cur.dirty) return true;
+  if (!confirm('มีผลตรวจที่ยังไม่บันทึก เปิดผลตรวจอื่นโดยไม่บันทึกหรือไม่?')) return false;
+  if (!cur.fu) applyExam(cur, cur.exam);
+  return true;
+}
+function switchExam(kid, e) {
+  const cur = exK();
+  if (cur.fu ? cur.exam && cur.exam.id === e.id : e.round === 'baseline') return;
+  if (!leaveExam()) return;
+  S.fu = e.round === 'baseline' ? null : fuOpen(kid, e);
+  S.sel = 16; hideSaveBar(); renderFile(); focusExamChip();
+}
+function startFu(kid, round) {
+  // Low and high risk have no recall in the plan: their 6-month visit is the project round (F-03, R1)
+  if (round === 'recall' && !planRecall(kid) && !confirm(`นักเรียนคนนี้ไม่มีตรวจซ้ำในแผน (ตรวจติดตามรวมกับตรวจรอบโครงการ 6 และ 12 เดือน)\nถ้าเป็นการตรวจเดือนที่ 6 หรือ 12 ให้เลือกตรวจรอบโครงการ\nบันทึกเป็นตรวจซ้ำนอกแผนหรือไม่`)) return;
+  if (!leaveExam()) return;
+  S.fu = fuNew(kid, round);
+  S.sel = 16; renderFile(); focusExamChip();
+}
+const focusExamChip = () => { const c = $('#examStart [aria-pressed="true"], #examStart [aria-current="true"]'); if (c) c.focus({ preventScroll: true }); };
+// The child's exams, and the follow-up exams the unit can add (a project round only once); the one due by plan month first.
+function examHistory(u, kid, cur) {
+  const xs = kidExams(u, kid.id);
+  const curId = cur.fu ? (cur.exam ? cur.exam.id : 'new') : (kid.exam ? kid.exam.id : null);
+  const chips = xs.map(e => el('button', { type: 'button', class: 'btn' + (e.id === curId ? ' btn--primary' : ''), 'aria-pressed': String(e.id === curId),
+    text: `${ROUND_TH[e.round] || e.round} ${thShort(fromInput(e.exam_date))}${e.attended ? '' : ' (ขาดเรียน)'}`, onclick: () => switchExam(kid, e) }));
+  if (curId === 'new') chips.push(el('span', { class: 'chip chip--warn', 'aria-current': 'true', tabindex: '-1', text: `${ROUND_TH[cur.round]} (ยังไม่บันทึก)` }));
+  const due = dueRound(kid), can = canServe(kid);
+  const kinds = ['recall', 'm6', 'm12'].filter(r => (r === 'recall' || !xs.some(e => e.round === r)) && !(curId === 'new' && cur.round === r));
+  kinds.sort((a, b) => (b === due) - (a === due));
+  const add = kinds.map(r => el('button', { type: 'button', class: 'btn btn--ghost', disabled: can ? null : true, title: can ? null : 'บันทึกผลตรวจติดตามได้เมื่อมีความยินยอมครบ',
+    text: `+ ${ROUND_TH[r]}${r === due ? ' (ถึงกำหนด)' : ''}`, onclick: () => startFu(kid, r) }));
+  return el('section', {}, el('div', { class: 'card stack' },
+    el('h3', { text: 'ผลตรวจของนักเรียนคนนี้' }),
+    el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap' }, ...chips),
+    el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;align-items:center' }, el('span', { class: 'small', text: 'เพิ่มผลตรวจติดตาม:' }), ...add),
+    el('span', { class: 'tiny muted', text: can ? 'แผนการดูแลยังใช้ผลตรวจครั้งแรก' : 'บันทึกผลตรวจติดตามได้เมื่อมีความยินยอมครบ' })));
+}
+// Every tooth sealed before is stated full, partial or lost: the project pays a re-seal only after a recorded loss
+// (D-77). Lost is Code A 7 with "7s" (sealant), which DMFT does not count as a filling (D-78).
+function renderSealRet(k) {
+  const box = $('#sealRet');
+  if (!box) return;
+  const list = k.fu ? k.sealPos.filter(p => k.teeth[p].t === 'p') : [];
+  const ok = $('#chartOkBox');
+  if (ok) {
+    ok.hidden = !needsChartOk(k); ok.replaceChildren();
+    if (needsChartOk(k)) ok.append(el('label', { class: 'chk' + (k.showMiss && !k.chartOk ? ' is-missing' : '') },
+    el('input', { type: 'checkbox', id: 'chartOk', checked: !!k.chartOk, onchange: e => { k.chartOk = e.target.checked; afterExamChange(); $('#chartOk')?.focus({ preventScroll: true }); } }),
+    ` ตรวจครบทุกซี่แล้ว (แผนภูมิตั้งต้นจากผลตรวจ${k.prev ? ' ' + thShort(fromInput(k.prev.exam_date)) : 'ครั้งก่อน'} แก้แล้ว ${changedTeeth(k)} ซี่)`));
+  }
+  box.hidden = !list.length; box.replaceChildren();
+  if (!list.length) return;
+  box.append(el('h4', { text: 'สภาพสารเคลือบหลุมร่องฟัน (ซี่ที่เคยเคลือบ)' }),
+    el('p', { class: 'small muted', text: 'ระบุสภาพสารเคลือบของทุกซี่ที่เคยเคลือบ' }));
+  for (const p of list) {
+    const t = k.teeth[p], st = !k.sealOk.has(p) ? null : +t.A === 2 ? 2 : +t.A === 1 ? 1 : [0, 7].includes(+t.A) ? 7 : null;
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': `สารเคลือบซี่ ${p}` });
+    for (const [v, lab] of [[2, 'เต็มซี่'], [1, 'เหลือบางส่วน'], [7, 'หลุด']]) seg.append(el('button', { type: 'button', 'aria-pressed': String(st === v), 'data-v': String(v), text: lab,
+      onclick: () => { t.A = v; if (v === 7) t.lost = 's'; else delete t.lost; delete k.needOv[p]; delete k.ovReason[p]; k.sealOk.add(p); afterExamChange(); refocus('#sealRet .seg', `สารเคลือบซี่ ${p}`, `button[data-v="${v}"]`); } }));
+    box.append(el('div', { class: 'row between' + (k.showMiss && !k.sealOk.has(p) ? ' is-missing' : ''), style: 'gap:8px' }, el('b', { text: `ซี่ ${p}` }), seg));
+  }
+}
 function renderExam() {
-  const u = unit(), k = curKid();
+  const u = unit(), kid = curKid(), k = exK();
   const open = examined(k) || k.editing;
   const box = $('#examStart'); box.replaceChildren();
   $('#examBody').hidden = !open;
@@ -1092,9 +1285,32 @@ function renderExam() {
         k.status === 'new' ? el('button', { class: 'btn', type: 'button', text: 'นักเรียนขาดเรียนวันตรวจ', onclick: () => markAbsent(k) }) : null))));
     return;
   }
-  if (k.editing) box.append(el('p', { class: 'note', text: 'ผลตรวจใหม่ ตั้งต้นจาก "ช่องปากเด็ก 7 ปีปกติ" แก้เฉพาะซี่ที่ต่าง ตอบแบบประเมินความเสี่ยงให้ครบ 8 ข้อ กรอก PI/GI ให้ครบ (หรือติ๊กว่าไม่ได้ตรวจ) แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง' }));
+  if (examined(kid)) box.append(examHistory(u, kid, k));
+  const locked = baseLocked(k);
+  if (locked) box.append(el('div', { class: 'hint row between', style: 'gap:8px' },
+    el('span', { text: 'ผลตรวจครั้งแรกเป็นฐานของแผนการดูแลและเงินของหน่วย จึงล็อกไว้ ดูได้ แก้เฉพาะเมื่อบันทึกผิด' }),
+    el('button', { class: 'btn', type: 'button', id: 'unlockBase', text: 'แก้ไขผลตรวจครั้งแรก', onclick: () => {
+      if (!confirm('ผลตรวจครั้งแรกเป็นฐานของแผนการดูแลและเงินของหน่วย แก้เฉพาะเมื่อบันทึกผิด แก้หรือไม่')) return;
+      k.unlock = true; renderExam(); } })));
+  if (k.fu && ROUND_MONTHS[k.round] && k.examDate && k.kid.base) {
+    const m = monthOf(k.kid.base, k.examDate), w = ROUND_MONTHS[k.round];
+    if (!w.includes(m)) box.append(el('div', { class: 'hint', text: `วันที่ตรวจนี้อยู่เดือนที่ ${m} หลังตรวจครั้งแรก ${ROUND_TH[k.round]}ควรอยู่เดือนที่ ${w[0]}–${w[w.length - 1]} ตรวจสอบรอบการตรวจหรือวันที่อีกครั้ง` }));
+  }
+  setIf('#examTitle', 'textContent', `การตรวจครั้งนี้: ${k.fu ? ROUND_TH[k.round] : ROUND_TH.baseline}${k.examDate ? ' ' + thShort(k.examDate) : ''}${k.fu ? (k.exam ? '' : ' (ยังไม่บันทึก)') : (examined(k) ? '' : ' (ยังไม่บันทึก)')}`);
+  if (k.fu) box.append(el('p', { class: 'note', text: k.exam ? `ผลตรวจติดตาม (${ROUND_TH[k.round]}) แก้ได้ แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง`
+    : `ผลตรวจติดตาม (${ROUND_TH[k.round]}) แผนภูมิฟันตั้งต้นจากผลตรวจ${k.prev ? ' ' + thShort(fromInput(k.prev.exam_date)) : 'ครั้งก่อน'} ตรวจและแก้ทุกซี่ ระบุสภาพสารเคลือบของซี่ที่เคยเคลือบให้ครบ${needsRisk(k) ? ' ตอบแบบประเมินความเสี่ยง 8 ข้อ (ประเมินประจำปี)' : ''} ตรวจและแก้ PI/GI (ตั้งต้นตามครั้งก่อน)${needsChartOk(k) ? ' ติ๊ก "ตรวจครบทุกซี่แล้ว"' : ''} แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง` }));
+  else if (k.editing) box.append(el('p', { class: 'note', text: 'ผลตรวจใหม่ ตั้งต้นจาก "ช่องปากเด็ก 7 ปีปกติ" แก้เฉพาะซี่ที่ต่าง ตอบแบบประเมินความเสี่ยงให้ครบ 8 ข้อ กรอก PI/GI ให้ครบ (หรือติ๊กว่าไม่ได้ตรวจ) แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง' }));
+  if (!needsRisk(k)) { const sc = riskScore(k); box.append(el('p', { class: 'small muted', text: `ความเสี่ยงใช้ผลประเมินครั้งก่อน (ประเมินปีละครั้ง): ${LEVEL[riskLevel(sc)].th} (${sc} คะแนน)` })); }
+  setIf('#riskSec', 'hidden', !needsRisk(k));
   const answered = riskAnswered(k), score = riskScore(k), lvl = riskLevel(score);
   $('#vDate').value = k.examDate ? toInput(k.examDate) : ''; $('#vDate').max = toInput(TODAY);
+  $('#vDate').min = k.fu && k.kid.base ? toInput(addDays(k.kid.base, 1)) : '';
+  const vr = $('#vRound');
+  if (vr) {
+    vr.replaceChildren(...(k.fu ? ['recall', 'm6', 'm12'] : ['baseline']).map(r => el('option', { value: r, text: ROUND_TH[r], disabled: k.fu && roundTaken(u, k, r) ? true : null })));
+    vr.value = k.fu ? k.round : 'baseline'; vr.disabled = !k.fu;
+  }
+  setIf('#presetBtn', 'hidden', !!k.fu);
   beHint($('#vDate'));
   $('#vExam').replaceChildren(el('option', { value: '', text: '– เลือกรหัสผู้ตรวจ –' }), ...u.examiners.map(c => el('option', { value: c, text: c })));
   $('#vExam').value = k.examiner || '';
@@ -1122,24 +1338,40 @@ function renderExam() {
   const activeOrCav = POS.some(p => { const t = k.teeth[p]; return t.t !== 'n' && ((t.B >= 1 && t.B <= 4 && t.act === 'a') || t.B >= 5); });
   if (activeOrCav && k.risk.r2 !== 'y') rh.append(el('div', { class: 'hint', text: 'แผนภูมิฟันพบรอยโรคที่กำลังลุกลามหรือรูผุ แต่ข้อ "พบรอยโรคฟันผุขาวขุ่นระยะลุกลาม" ยังไม่ได้ตอบว่าใช่ โปรดตรวจสอบ' }));
   for (const [id, arr] of [['#archU', UPPER], ['#archL', LOWER]]) $(id).replaceChildren(...arr.map((pos, i) => toothCell(pos, k, i === 6)));
+  renderSealRet(k);
   renderEditor();
   renderPigi(k);
   renderSummary(k, lvl, score, urg, refTeeth, answered);
+  // Locked first exam: everything shows, nothing changes (a tooth can still be picked to read its codes).
+  for (const c of [$('#vDate'), $('#vExam'), $('#vPlace'), $('#presetBtn'), $('#pigiSkip'), ...$$('#urgent input')]) if (c) c.disabled = locked;
+  if (locked) for (const c of $$('#examBody button, #examBody input, #examBody select')) if (!c.matches('.tcode, #toothPrev, #toothNext')) c.disabled = true;
 }
+// The first exam opens read-only once it carries a plan in progress: from plan month 2, or once a follow-up exists.
+const baseLocked = k => !k.fu && examined(k) && !k.unlock && (monthOf(k.base, TODAY) >= 2 || kidExams(unit(), k.id).some(e => e.round !== 'baseline'));
 // After a re-render, put focus back on the same control (matched by aria-label) so Tab keeps working (R2-06).
 function refocus(sel, label, inner) {
   const box = $$(sel).find(x => x.getAttribute('aria-label') === label);
   const target = box && inner ? box.querySelector(inner) : box;
   if (target) target.focus({ preventScroll: true });
 }
-function afterExamChange() { const k = curKid(); k.dirty = true; renderFileHead(); renderExam(); syncSaveBar(); }
-$('#vDate').addEventListener('change', e => { const k = curKid(); k.examDate = fromInput(e.target.value); afterExamChange(); });
-$('#vExam').addEventListener('change', e => { const k = curKid(); k.examiner = e.target.value; afterExamChange(); });
-$('#vPlace').addEventListener('change', e => { const k = curKid(); k.place = e.target.value; afterExamChange(); });
+function afterExamChange() { const k = exK(); k.dirty = true; renderFileHead(); renderExam(); syncSaveBar(); }
+$('#vDate').addEventListener('change', e => { const k = exK(); k.examDate = fromInput(e.target.value); afterExamChange(); });
+$('#vExam').addEventListener('change', e => { const k = exK(); k.examiner = e.target.value; afterExamChange(); });
+$('#vPlace').addEventListener('change', e => { const k = exK(); k.place = e.target.value; afterExamChange(); });
+$('#vRound')?.addEventListener('change', e => {
+  const k = exK();
+  if (!k || !k.fu) return;
+  if (e.target.value === 'recall' && !planRecall(k.kid) && !confirm('นักเรียนคนนี้ไม่มีตรวจซ้ำในแผน (ตรวจติดตามรวมกับตรวจรอบโครงการ 6 และ 12 เดือน)\nบันทึกเป็นตรวจซ้ำนอกแผนหรือไม่')) { e.target.value = k.round; return; }
+  const had = needsRisk(k);
+  k.round = e.target.value;
+  if (needsRisk(k) !== had) k.risk = needsRisk(k) ? {} : clone(k.prev ? k.prev.risk : {});   // the yearly assessment starts empty
+  afterExamChange();
+});
 function setPresence(k, pos, v) {
   const t = k.teeth[pos];
   if (v === 'n') Object.assign(t, { t: 'n', A: 99, B: null, act: null, occ: undefined, partial: false });
   else Object.assign(t, { t: v, A: 0, B: 0, act: null, occ: undefined });
+  delete t.lost;
   delete k.needOv[pos]; delete k.ovReason[pos];
   S.sel = pos;
   afterExamChange();
@@ -1153,7 +1385,7 @@ function toothCell(pos, k, mid) {
   if (t.t === 'n') { cls += ' is-none'; codes = String(t.A); label = `ตำแหน่ง ${pos}: ${CODE_N[t.A]}`; }
   else {
     const n = needOf(pos, k);
-    codes = `${t.A}·${t.B}`; need = n == null ? '' : String(n);
+    codes = `${t.A}${t.A === 7 && t.lost ? t.lost : ''}·${t.B}`; need = n == null ? '' : String(n);
     if (t.B >= 5) cls += ' sev-high'; else if (t.B >= 3) cls += ' sev-mid'; else if (t.B >= 1) cls += ' sev-low';
     else if (t.A === 1 || t.A === 2) cls += ' is-sealed'; else if (t.A >= 3 && t.A <= 8) cls += ' is-restored';
     if (n >= 5) cls += ' need-ref';
@@ -1170,10 +1402,14 @@ function codeButtons(values, current, onPick, labels, sugg) {
 }
 const OV_REASONS = ['ดุลยพินิจทางคลินิก', 'เด็กไม่ให้ความร่วมมือ', 'ผู้ปกครองปฏิเสธ', 'ส่งต่อแล้ว'];
 function renderEditor() {
-  const k = curKid(), pos = S.sel, box = $('#editor');
+  const k = exK(), pos = S.sel, box = $('#editor');
   box.replaceChildren();
   const t = k.teeth[pos];
-  const set = patch => { Object.assign(t, patch); delete k.needOv[pos]; delete k.ovReason[pos]; afterExamChange(); };
+  const set = patch => {
+    Object.assign(t, patch); delete k.needOv[pos]; delete k.ovReason[pos];
+    if ('A' in patch) { if (patch.A === 7) t.lost = inferLost(k, pos); else delete t.lost; if (k.fu && k.sealPos.includes(pos)) k.sealOk.add(pos); }
+    afterExamChange();
+  };
   const typeSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'ซี่ที่พบ' });
   const types = [];
   if (PRIM[pos]) types.push(['d', `ฟันน้ำนม ${PRIM[pos]}`]);
@@ -1200,6 +1436,9 @@ function renderEditor() {
     el('span', { class: 'small muted', text: 'Code A · การอุด / เคลือบหลุมร่องฟัน' }),
     codeButtons([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], t.A, v => set({ A: v }), CODE_A),
     el('p', { class: 'codedesc', text: CODE_A[t.A] }),
+    t.A === 7 ? el('div', { class: 'stack' + (k.showMiss && !t.lost ? ' is-missing' : '') }, el('span', { class: 'small muted', text: 'สิ่งที่แตกหรือหลุด' }),
+      el('div', { class: 'seg', role: 'group', 'aria-label': 'สิ่งที่แตกหรือหลุด' }, ...['r', 's'].map(v => el('button', { type: 'button', 'aria-pressed': String(t.lost === v), text: LOST_TH[v],
+        onclick: () => { t.lost = v; afterExamChange(); refocus('#editor .seg', 'สิ่งที่แตกหรือหลุด', `button[aria-pressed="true"]`); } })))) : null,
     el('span', { class: 'small muted', text: 'Code B · รอยผุ ICDAS (ด้านที่รุนแรงที่สุด)' }),
     codeButtons([0, 1, 2, 3, 4, 5, 6], t.B, v => set({ B: v, act: v === 0 ? null : (t.act || 'a'), occ: t.occ != null && t.occ > v ? v : t.occ }), CODE_B),
     el('p', { class: 'codedesc', text: CODE_B[t.B] }));
@@ -1228,11 +1467,11 @@ function renderEditor() {
 }
 // One tap must not wipe a finished chart (R1-06).
 $('#presetBtn').addEventListener('click', () => {
-  const k = curKid();
+  const k = exK();
   if ((JSON.stringify(k.teeth) !== JSON.stringify(typicalMouth()) || Object.keys(k.needOv).length) && !confirm('ล้างแผนภูมิฟันทั้ง 24 ซี่กลับเป็นค่าเริ่มต้นหรือไม่ สิ่งที่แก้ไว้ในแผนภูมิจะหายไป')) return;
   k.teeth = typicalMouth(); k.needOv = {}; k.ovReason = {}; afterExamChange();
 });
-$$('#urgent input').forEach(b => b.addEventListener('change', () => { curKid().urgent[b.dataset.u] = b.checked; afterExamChange(); }));
+$$('#urgent input').forEach(b => b.addEventListener('change', () => { exK().urgent[b.dataset.u] = b.checked; afterExamChange(); }));
 // PI/GI: each index tooth scored or marked "ยังไม่ขึ้น" / "ตรวจไม่ได้", or "ไม่ได้ตรวจ PI/GI ครั้งนี้" ticked (then
 // saved as {}) (R1-14). While editing, a tooth the chart shows as not erupted starts as "ยังไม่ขึ้น".
 function renderPigi(k) {
@@ -1266,13 +1505,13 @@ function renderPigi(k) {
     tb.append(tr);
   }
 }
-$('#pigiSkip')?.addEventListener('change', e => { const k = curKid(); if (!k) return; k.pigiSkip = e.target.checked; afterExamChange(); });
+$('#pigiSkip')?.addEventListener('change', e => { const k = exK(); if (!k) return; k.pigiSkip = e.target.checked; afterExamChange(); });
 function indices(k) {
   let d = 0, m = 0, f = 0, D = 0, M = 0, F = 0;
   for (const p of POS) {
     const t = k.teeth[p];
     if (t.t === 'n') { if (t.A === 97) { if (PRIM[p] && !PERM_EARLY.includes(p)) m++; else M++; } continue; }
-    const filled = t.A >= 3 && t.A <= 8;
+    const filled = t.A >= 3 && t.A <= 8 && !(t.A === 7 && t.lost === 's');   // a lost sealant is not a filling (D-78)
     if (t.t === 'd') { if (t.B >= 3) d++; else if (filled) f++; } else { if (t.B >= 3) D++; else if (filled) F++; }
   }
   return { dmft: d + m + f, DMFT: D + M + F, d, D };
@@ -1300,26 +1539,37 @@ const examDateProblem = k => (!k.examDate ? 'ใส่วันที่ตร�
 // Everything that still blocks saving the exam, in screen order.
 function examProblems(k) {
   const out = [], a = riskAnswered(k), n = pigiDone(k), dp = examDateProblem(k);
+  const lostWhat = POS.filter(p => k.teeth[p].t !== 'n' && k.teeth[p].A === 7 && !k.teeth[p].lost).map(p => toothNo(p, k.teeth[p]));
   if (dp) out.push(dp);
   if (!k.examiner) out.push('ยังไม่ได้เลือกรหัสผู้ตรวจ');
   if (a < 8) out.push(`แบบประเมินความเสี่ยงตอบแล้ว ${a}/8 ข้อ`);
+  if (lostWhat.length) out.push(`ซี่ ${lostWhat.join(', ')} Code A 7: เลือกว่าวัสดุอุด (7r) หรือสารเคลือบ (7s) หลุด`);
   if (!k.pigiSkip && n < 6) out.push(`PI/GI ครบ ${n}/6 ซี่ (กรอกคะแนน หรือเลือกสถานะ "ยังไม่ขึ้น" / "ตรวจไม่ได้" หรือติ๊ก "ไม่ได้ตรวจ PI/GI ครั้งนี้")`);
+  const later = !k.fu && k.examDate && k.exam && k.exam.attended ? kidExams(unit(), k.id).find(e => e.round !== 'baseline' && fromInput(e.exam_date) <= k.examDate) : null;
+  if (later) out.push(`วันที่ตรวจครั้งแรกต้องก่อนวันตรวจติดตาม (${thShort(fromInput(later.exam_date))})`);
+  if (k.fu) {
+    if (!dp && k.kid.base && k.examDate <= k.kid.base) out.push('วันที่ตรวจติดตามต้องหลังวันตรวจครั้งแรก');
+    if (roundTaken(unit(), k, k.round)) out.push(`บันทึก${ROUND_TH[k.round]}ของนักเรียนคนนี้ไว้แล้ว`);
+    const left = k.sealPos.filter(p => k.teeth[p].t === 'p' && !k.sealOk.has(p));
+    if (left.length) out.push(`ยังไม่ได้ระบุสภาพสารเคลือบ ซี่ ${left.join(', ')}`);
+    if (needsChartOk(k) && !k.chartOk) out.push('ยังไม่ได้ติ๊ก "ตรวจครบทุกซี่แล้ว"');
+  }
   return out;
 }
 // The save bar always says what is left (R1-04).
 function syncSaveBar() {
-  const k = S.tab === 'file' ? curKid() : null;
+  const k = S.tab === 'file' ? exK() : null;
   const on = !!(k && k.dirty && k.risk && k.pigi);
   $('#saveBar').hidden = !on;
   if (!on) return;
   const left = examProblems(k).length;
-  $('#saveMsg').textContent = `ยังไม่บันทึก · แบบประเมิน ${riskAnswered(k)}/8 ข้อ · PI/GI ${k.pigiSkip ? 'ไม่ได้ตรวจ' : pigiDone(k) + '/6 ซี่'} · ผู้ตรวจ ${k.examiner || 'ยังไม่เลือก'}${left ? '' : ' · ครบแล้ว กดบันทึกผลตรวจ'}`;
+  $('#saveMsg').textContent = `ยังไม่บันทึก · ${ROUND_TH[k.fu ? k.round : 'baseline']} · ${needsRisk(k) ? `แบบประเมิน ${riskAnswered(k)}/8 ข้อ · ` : ''}PI/GI ${k.pigiSkip ? 'ไม่ได้ตรวจ' : pigiDone(k) + '/6 ซี่'} · ผู้ตรวจ ${k.examiner || 'ยังไม่เลือก'}${k.fu && k.sealPos.length ? ` · สารเคลือบ ${k.sealPos.filter(p => k.sealOk.has(p)).length}/${k.sealPos.length} ซี่` : ''}${needsChartOk(k) ? ` · แก้จากครั้งก่อน ${changedTeeth(k)} ซี่` : ''}${left ? '' : ' · ครบแล้ว กดบันทึกผลตรวจ'}`;
 }
 function hideSaveBar() { $('#saveBar').hidden = true; }
-$('#discardBtn').addEventListener('click', () => { const k = curKid(); if (!k) return; discardExam(k); toast('ยกเลิกการแก้ไขแล้ว'); renderFile(); });
+$('#discardBtn').addEventListener('click', () => { const k = exK(); if (!k) return; discardExam(k); toast('ยกเลิกการแก้ไขแล้ว'); renderFile(); });
 $('#saveExamBtn').addEventListener('click', saveExam);
 async function saveExam() {
-  const u = unit(), k = curKid();
+  const u = unit(), k = exK();
   if (!k || !k.dirty) return;
   if (!hasConsent(k)) { toast('ยังไม่มีความยินยอมครบ บันทึกผลตรวจไม่ได้'); return; }
   const probs = examProblems(k);
@@ -1336,19 +1586,22 @@ async function saveExam() {
   for (const pos of POS) {
     const t = k.teeth[pos];
     const o = { t: t.t, A: t.A, B: t.t === 'n' ? null : t.B, act: t.t === 'n' || !(t.B >= 1) ? null : (t.act || 'a') };
+    if (t.t !== 'n' && t.A === 7 && t.lost) o.lost = t.lost;   // 7s sealant lost, 7r filling lost (D-78)
     if (FPM.includes(pos) && t.t === 'p') { if (t.occ != null) o.occ = t.occ; o.partial = !!t.partial; }
     o.need = t.t === 'n' ? null : needOf(pos, k);
     teeth[pos] = o;
   }
   const ovReason = Object.fromEntries(Object.keys(k.needOv).map(p => [p, k.ovReason[p] || OV_REASONS[0]]));
-  const row = { study_id: k.id, unit_id: u.id, round: 'baseline', exam_date: toInput(k.examDate), place: k.place, examiner_code: k.examiner, attended: true,
+  const row = { study_id: k.id, unit_id: u.id, round: k.fu ? k.round : 'baseline', exam_date: toInput(k.examDate), place: k.place, examiner_code: k.examiner, attended: true,
     risk: k.risk, teeth, pigi: k.pigiSkip ? {} : k.pigi, urgent: k.urgent, need_override: k.needOv, override_reason: ovReason, fl_override: k.flOv };
+  if (k.fu) { await saveFollowUp(u, k, row); return; }
   $('#saveExamBtn').disabled = true;
   const res = k.exam ? await sb.from('exams').update(row).eq('id', k.exam.id).select().single() : await sb.from('exams').insert(row).select().single();
   $('#saveExamBtn').disabled = false;
   if (res.error) { toastErr(res.error); return; }
   const first = !k.exam || !k.exam.attended;
   const oldDate = k.exam && k.exam.attended ? k.exam.exam_date : null;
+  putExam(u, res.data);
   applyExam(k, res.data);
   hideSaveBar();
   let note = '';
@@ -1363,6 +1616,59 @@ async function saveExam() {
   }
   toast(first ? `บันทึกผลตรวจแล้ว · ${k.id}${note}` : `บันทึกการแก้ไขผลตรวจแล้ว · ${k.id}${note}`, note && /ไม่สำเร็จ|ส่งเบิกไปแล้ว/.test(note) ? 8000 : 4200);
   if (first) S.ftab = 'plan';
+  renderFile();
+}
+
+// A recall exam is also service 174 on its date, in the plan month it fulfils (very high risk: months 3 and 9) or
+// out of plan; the 6- and 12-month rounds are project data collection with their own fee, not a unit service (D-30).
+async function saveFollowUp(u, x, row) {
+  $('#saveExamBtn').disabled = true;
+  const res = x.exam ? await sb.from('exams').update(row).eq('id', x.exam.id).select().single() : await sb.from('exams').insert(row).select().single();
+  $('#saveExamBtn').disabled = false;
+  if (res.error && /exams_one_per_study_round/.test(res.error.message || '')) {
+    // Saved from another device meanwhile: refresh this child's exams, keep what was entered (F-07, R1)
+    const { data } = await sb.from('exams').select('*').eq('study_id', x.id);
+    if (data) u.exams = u.exams.filter(e => e.study_id !== x.id).concat(data);
+    toast(`บันทึก${ROUND_TH[row.round]}ของนักเรียนคนนี้ไว้แล้ว (อาจจากอีกเครื่อง) ข้อมูลที่กรอกยังอยู่ กด "ยกเลิกการแก้ไข" แล้วเปิดผลตรวจที่มีอยู่เพื่อเทียบและแก้`, 9000);
+    renderExam(); syncSaveBar();
+    return;
+  }
+  if (res.error) { toastErr(res.error); return; }
+  const first = !x.exam, kid = x.kid, was = first ? null : x.exam;
+  putExam(u, res.data);
+  S.txVer = (S.txVer || 0) + 1;   // a recorded loss changes what the project pays for a re-seal (D-77)
+  S.fu = fuOpen(kid, res.data);
+  hideSaveBar();
+  const isRecall = row.round === 'recall', wasRecall = !!was && was.round === 'recall';
+  const day174 = date => (u.txByKid[kid.id] || []).filter(t => t.code === '174' && toInput(t.date) === date);
+  let note = '';
+  if (isRecall && !wasRecall && !(u.txByKid[kid.id] || []).some(t => (t.code === '174' || t.code === '173') && toInput(t.date) === row.exam_date)) {
+    const pf = planFor(kid, { code: '174', tooth: null, date: fromInput(row.exam_date) });
+    let err = null;
+    const ok = await insertServices([{ unit_id: u.id, study_id: kid.id, code: '174', tooth: null, service_date: row.exam_date, plan_key: pf ? pf.row.key : null, plan_month: pf ? pf.month : null,
+      from_plan: !!pf, provider: x.examiner, status: u.arm === 'cap' ? 'recorded' : 'draft' }], e => { err = e; });
+    note = ok ? ` · บันทึกบริการตรวจช่องปาก (174)${pf && pf.month ? ` เดือนที่ ${pf.month}` : ' นอกแผน'} ให้แล้ว${u.arm === 'cap' ? '' : ' (ร่าง ยังไม่ส่ง)'}`
+      : ` · แต่บันทึกบริการตรวจ (174) ไม่สำเร็จ (${errText(err)}) บันทึกที่หน้า "${claimTab(u)}" แทน`;
+  } else if (wasRecall && (!isRecall || was.exam_date !== row.exam_date)) {
+    // The recall's 174 follows a corrected date, and goes when the exam turns out to be a project round (F-08, R1)
+    const mine = day174(was.exam_date), open = mine.filter(t => ['draft', 'recorded'].includes(t.status));
+    if (open.length) {
+      const q = sb.from('services');
+      const { data, error } = isRecall ? await q.update({ service_date: row.exam_date }).in('id', open.map(t => t.id)).in('status', ['draft', 'recorded']).select()
+        : await q.delete().in('id', open.map(t => t.id)).in('status', ['draft', 'recorded']).select();
+      if (error) note = ` · แต่${isRecall ? 'ย้ายวันที่' : 'ลบ'}บริการตรวจ (174) ไม่สำเร็จ (${errText(error)})`;
+      else {
+        if (isRecall) for (const r of data || []) { const t = u.tx.find(y => y.id === r.id); if (t) Object.assign(t, txFrom(r)); }
+        else u.tx = u.tx.filter(t => !(data || []).some(r => r.id === t.id));
+        reindex(u);
+        note = isRecall ? ` · ย้ายวันที่บริการตรวจ (174) เป็น ${thShort(fromInput(row.exam_date))} แล้ว` : ' · ลบบริการตรวจ (174) ของการตรวจนี้แล้ว (ตรวจรอบโครงการไม่ใช่บริการ)';
+      }
+    }
+    if (mine.length > open.length) note += ' · บริการตรวจ (174) ของวันนั้นส่งเบิกไปแล้ว แจ้งทีมวิจัย';
+  } else if (!isRecall && (first || wasRecall)) note = ' · ตรวจรอบโครงการเป็นการเก็บข้อมูล ไม่บันทึกเป็นบริการ 174';
+  const rs = fuRows(u, kid).filter(r => !rowTx(u, kid, r).length);
+  if (rs.length) note += ` · แผนการดูแลมี ${rs.map(r => `${r.reseal ? 'เคลือบซ้ำ' : 'เคลือบ'} ซี่ ${r.tooth}`).join(', ')}`;
+  toast(`${first ? 'บันทึกผลตรวจติดตามแล้ว' : 'บันทึกการแก้ไขผลตรวจติดตามแล้ว'} · ${kid.id}${note}`, /ไม่สำเร็จ|แจ้งทีมวิจัย/.test(note) ? 8000 : 5000);
   renderFile();
 }
 
@@ -1438,7 +1744,12 @@ function monthCell(k, row, m, cm, txs) {
   if (row.anytime) { const t = txs.find(x => monthOf(k.base, x.date) === m); return t ? el('span', { class: 'mdone', title: `ทำแล้ว ${thDate(t.date)}`, text: '✓' }) : ''; }
   const planned = row.months.includes(m);
   const inM = txs.filter(x => txMonth(k, x) === m);
-  if (row.study) return planned ? el('span', { class: 'cellbtn is-study', title: `ตรวจรอบโครงการ ครั้งที่ ${m === 6 ? 2 : 3} (เปิดใช้ภายหลัง)`, 'aria-label': 'ตรวจรอบโครงการ' }) : el('span', { class: 'dash', 'aria-hidden': 'true', text: '–' });
+  if (row.study) {
+    if (!planned) return el('span', { class: 'dash', 'aria-hidden': 'true', text: '–' });
+    const ex = studyExam(unit(), k, m), name = ROUND_TH[m === 6 ? 'm6' : 'm12'];
+    return el('span', { class: 'cellbtn is-study' + (ex ? ' is-done' : ''), title: ex ? `${name} บันทึกแล้ว ${thDate(fromInput(ex.exam_date))}` : `${name} · บันทึกที่แท็บ "ผลตรวจ"`,
+      'aria-label': `${name}${ex ? ' บันทึกแล้ว' : ''}` }, ex ? '✓' : '');
+  }
   if (!planned) return inM.length ? el('span', { class: 'cellbtn is-extra', title: `ทำนอกแผน ${inM.map(x => thShort(x.date)).join(', ')}`, 'aria-label': `${rowName(row)} เดือนที่ ${m} ทำนอกแผน`, text: '●' }) : el('span', { class: 'dash', 'aria-hidden': 'true', text: '–' });
   const t = inM[0], late = !t && m < cm, future = m > cm;
   const cls = 'cellbtn' + (t ? ' is-done' : late ? ' is-late' : m === cm ? ' is-due' : '');
@@ -1453,7 +1764,7 @@ function monthCell(k, row, m, cm, txs) {
 function anyCell(k, row, txs) {
   if (!row.anytime) return '';
   const t = txs[0];
-  const late = !t && (TODAY - k.base) / 864e5 > 30;
+  const late = !t && (TODAY - (row.from || k.base)) / 864e5 > 30;
   const u = unit();
   return el('span', { class: 'anycell' },
     el('button', { type: 'button', class: 'cellbtn' + (t ? ' is-done' : late ? ' is-late' : ' is-due'), 'aria-pressed': String(!!t), 'aria-label': `${rowName(row)} ${t ? 'ทำแล้ว' : late ? 'ค้าง' : 'ยังไม่ทำ'}`,
@@ -1478,8 +1789,11 @@ function renderPlanGrid() {
   sub.replaceChildren(el('span', { class: 'chip ' + LEVEL[lvl].chip, text: LEVEL[lvl].th }), ` ตรวจครั้งแรก ${thDate(k.base)} · ตอนนี้เดือนที่ ${cm}`);
   if (k.dirty) sub.append(el('div', { class: 'hint', style: 'margin-top:8px', text: 'มีผลตรวจที่ยังไม่บันทึก แผนนี้คิดจากผลตรวจที่กำลังแก้ บันทึกผลตรวจก่อนติ๊กแผน' }));
   if (fl && fl.freqSel) {
-    const sel = el('select', { 'aria-label': 'ความถี่ฟลูออไรด์', onchange: e => { k.flOv = +e.target.value; k.dirty = true; syncSaveBar(); renderPlanGrid(); } }, el('option', { value: '6', text: 'ทุก 6 เดือน', selected: (k.flOv || 6) === 6 }), el('option', { value: '3', text: 'ทุก 3 เดือน', selected: k.flOv === 3 }));
-    sub.append(el('label', { class: 'small noprint', style: 'margin-left:12px' }, 'ฟลูออไรด์ (แบบฟอร์ม: 3–6 เดือน) ', sel));
+    // Fixed once the cohort is sent (D-78): fluoride more often is fine, the round-1 budget stays.
+    const fixed = !!u.cohort_submitted_at;
+    const sel = el('select', { 'aria-label': 'ความถี่ฟลูออไรด์', disabled: fixed ? true : null, onchange: e => { k.flOv = +e.target.value; k.dirty = true; syncSaveBar(); renderPlanGrid(); } }, el('option', { value: '6', text: 'ทุก 6 เดือน', selected: (k.flOv || 6) === 6 }), el('option', { value: '3', text: 'ทุก 3 เดือน', selected: k.flOv === 3 }));
+    sub.append(el('label', { class: 'small noprint', style: 'margin-left:12px' }, 'ฟลูออไรด์ (แบบฟอร์ม: 3–6 เดือน) ', sel,
+      fixed ? el('span', { class: 'tiny muted', text: ' ล็อกตั้งแต่ส่ง cohort ให้บ่อยกว่านี้ได้ แต่งบไม่เปลี่ยน' }) : el('span', { class: 'tiny muted', text: ' เลือกให้เสร็จก่อนส่ง cohort' })));
   }
   const table = el('table', { class: 'pgrid' });
   const h1 = el('tr', {}, el('th', { class: 'rowh', scope: 'col' }), el('th', { colspan: '12', scope: 'colgroup', class: 'grp-h', text: `เดือนที่ (นับจากตรวจครั้งแรก ${thShort(k.base)})` }), el('th', { class: 'anycol' }));
@@ -1523,7 +1837,7 @@ function renderPlanTotals(u, k, rows, cm) {
     if (row.study) continue;
     const reps = row.anytime ? 1 : row.months.length;
     if (row.prim) primN++;
-    else { if (PRICE[row.code] && PRICE[row.code].unpriced) unpriced += reps; main += refValue(u, row.code, row.tooth) * reps; }
+    else if (!row.fu) { if (PRICE[row.code] && PRICE[row.code].unpriced) unpriced += reps; main += refValue(u, row.code, row.tooth) * reps; }
     const txs = rowTx(u, k, row);
     if (row.anytime) { dueN++; if (txs.length) done++; }
     else for (const m of row.months) if (m <= cm) { dueN++; if (txs.some(t => txMonth(k, t) === m)) done++; }
@@ -1565,7 +1879,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.2.4', '_blank');
+  const w = window.open('booklet.html?v=1.3.0', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -1576,21 +1890,22 @@ $('#printBtn').addEventListener('click', () => {
 function planFor(k, { code, tooth, date }) {
   if (!k || !examined(k)) return null;
   const u = unit(), m = monthOf(k.base, date);
+  let doneAny = null;   // an anytime row already done (the first sealant) yields to an open one (a re-seal)
   for (const r of buildPlan(k)) {
-    if (r.study || !r.codes.includes(code) || (r.tooth != null && r.tooth !== tooth)) continue;
-    if (r.anytime) return { row: r, month: null, late: false };
+    if (r.study || !r.codes.includes(code) || (r.tooth != null && r.tooth !== tooth) || (r.from && date < r.from)) continue;
+    if (r.anytime) { if (!rowTx(u, k, r).length) return { row: r, month: null, late: false }; doneAny = doneAny || r; continue; }
     const done = new Set(rowTx(u, k, r).map(t => txMonth(k, t)));
     if (r.months.includes(m) && !done.has(m)) return { row: r, month: m, late: false };
     const earlier = r.months.filter(x => x < m && !done.has(x));
     if (earlier.length) return { row: r, month: earlier[0], late: true };
     if (r.months.includes(m)) return { row: r, month: m, late: false };
   }
-  return null;
+  return doneAny ? { row: doneAny, month: null, late: false } : null;
 }
 function planMatch(k, tx) {
   if (!k || !examined(k)) return null;
   const m = txMonth(k, tx);
-  return buildPlan(k).find(r => !r.study && r.codes.includes(tx.code) && (r.tooth == null || r.tooth === tx.tooth) && (r.anytime || r.months.includes(m))) || null;
+  return buildPlan(k).find(r => !r.study && r.codes.includes(tx.code) && (r.tooth == null || r.tooth === tx.tooth) && (!r.from || tx.date >= r.from) && (r.anytime || r.months.includes(m))) || null;
 }
 async function saveOutcome(tx) {
   const v = prompt('ผลการส่งต่อ (เช่น รักษาแล้วที่โรงพยาบาล / ยังไม่ไปตามนัด) ห้ามใส่ชื่อ', tx.outcome || '');
@@ -1692,9 +2007,10 @@ function toothOptions(k, code) {
   if (!kind) return null;
   const opts = [];
   if (kind === 'opt') opts.push(['', 'ไม่ระบุซี่']);
+  const teeth = lastTeeth(k);   // a first molar a follow-up found erupted can be sealed
   for (const p of POS) {
-    const t = k.teeth[p];
-    if (t.t === 'n') continue;
+    const t = teeth[p];
+    if (!t || t.t === 'n') continue;
     if (kind === 'fpm' && !(t.t === 'p' && FPM.includes(p))) continue;
     if (kind === 'prim' && t.t !== 'd') continue;
     const no = toothNo(p, t);
@@ -1881,7 +2197,9 @@ function ledgerEntries(u) {
       const g = groups.get(tx.gid); g.n++; g.ref += txAmt(u, tx); g.txs.push(tx);
     } else out.push({ group: !tx.kid, tx, date: tx.date, code: tx.code, status: tx.status, ref: txAmt(u, tx), by: tx.by });
   }
-  return out.sort((a, b) => b.date - a.date || (b.tx ? b.tx.id : 0) - (a.tx ? a.tx.id : 0));
+  // Newest first within a day too: a group activity sorts by its last row, so one just saved is not pushed off the page.
+  const idOf = x => (x.tx ? x.tx.id : Math.max(...x.txs.map(t => t.id)));
+  return out.sort((a, b) => b.date - a.date || idOf(b) - idOf(a));
 }
 async function setStatus(txs, status, label) {
   const ids = txs.map(t => t.id);

@@ -62,7 +62,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(await until(() => d.querySelector('#home .tiles')), 'home dashboard renders after login');
   ok(/หน่วยทดสอบ ข/.test(d.querySelector('#acctChip').textContent), 'account chip shows the unit');
   ok(noNull(d), 'no "null" text on the home screen (R1-01)');
-  ok(d.querySelector('#verTag').textContent === 'v1.2 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
+  ok(d.querySelector('#verTag').textContent === 'v1.3 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
   ok(d.querySelector('#provSel').value === '' && d.querySelector('#provSel').classList.contains('is-missing'), '"ผู้บันทึก" starts empty and marked (R1-02)');
   ok(d.querySelectorAll('#home .tile--link').length >= 3, 'home tiles open the student list (R1-19)');
   ok(/ค่าเหมาจ่ายรายหัวทั้งปี/.test(d.querySelector('#home').textContent) && /งวดแรก 70%/.test(d.querySelector('#home').textContent), 'home shows the capitation and its 70% first instalment (v1.1)');
@@ -333,6 +333,113 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(!!delBtn, 'a returned claim has "ลบ" (R1-15)');
   if (delBtn) { click(G.w, delBtn); ok(await until(() => /ลบแล้ว/.test(G.d.querySelector('#toast').textContent)), 'returned claim deleted', G.d.querySelector('#toast').textContent); }
   ok(G.errors.length === 0, 'no script errors (ffs delete)', G.errors.join(' | '));
+
+  console.log('unit public-ffs: follow-up exam (v1.3)');
+  {
+    // A child examined 92 days ago (very high risk: recalls at months 3 and 9) with sealants on 16 and 26 since.
+    const cfg = fs.readFileSync(path.join(APP, 'config.js'), 'utf8');
+    const api = require('@supabase/supabase-js').createClient(cfg.match(/url:\s*'([^']+)'/)[1], cfg.match(/anonKey:\s*'([^']+)'/)[1], { auth: { persistSession: false, autoRefreshToken: false } });
+    await api.auth.signInWithPassword({ email: ACCTS['public-ffs'].email, password: ACCTS['public-ffs'].password });
+    const fid = (await api.rpc('enrol_child', { p_child: { school_id: 'C-01', class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on: daysAgo(100), assent: true, coverage: 'uc', uc_checked_on: daysAgo(100), uc_method: 'ตรวจสิทธิออนไลน์' } })).data;
+    const POS = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36], EARLY = [16, 26, 36, 46, 11, 21, 31, 32, 41, 42];
+    const teeth = Object.fromEntries(POS.map(p => [p, EARLY.includes(p) ? { t: 'p', A: 0, B: 0, act: null, need: [16, 26, 36, 46].includes(p) ? 2 : 0, ...([16, 26, 36, 46].includes(p) ? { partial: false } : {}) } : { t: 'd', A: 0, B: 0, act: null, need: 0 }]));
+    teeth[46] = { t: 'n', A: 99, B: null, act: null, need: null };   // 46 not erupted at the first exam
+    const bx = await api.from('exams').insert({ study_id: fid, unit_id: 'public-ffs', round: 'baseline', exam_date: daysAgo(92), place: 'van', examiner_code: 'TEST-C1', attended: true,
+      risk: { r1: 'n', r2: 'y', r3: 'y', r4: 'n', r5: 'y', r6: 'n', r7: 'y', r8: 'y' }, teeth, pigi: {}, urgent: { pain: false, swell: false, big: false } }).select('id').single();
+    const sx = await api.from('services').insert([16, 26].map(tooth => ({ unit_id: 'public-ffs', study_id: fid, code: '171', tooth, service_date: daysAgo(85), status: 'draft' })));
+    ok(!!fid && !bx.error && !sx.error, 'set-up: child with a first exam 92 days ago and sealants on 16 and 26', (bx.error || sx.error || {}).message);
+    const F = boot();
+    await login(F.w, F.d, 'public-ffs');
+    await until(() => F.d.querySelector('#home .tiles'));
+    set(F.w, F.d.querySelector('#provSel'), 'TEST-C1');
+    click(F.w, F.d.querySelector('#t-kids'));
+    await until(() => F.d.querySelectorAll('#kidGroups .kcard').length);
+    set(F.w, F.d.querySelector('#kfQ'), fid, 'input');
+    click(F.w, await until(() => F.d.querySelector('#kidGroups .kcard')));
+    click(F.w, F.d.querySelector('#ft-exam'));
+    const addRecall = await until(() => byText(F.d, '#examStart button', /\+ ตรวจซ้ำตามนัด/));
+    ok(!!addRecall && /ถึงกำหนด/.test(addRecall.textContent) && !!byText(F.d, '#examStart button', /\+ ตรวจรอบโครงการ 6 เดือน/) && !!byText(F.d, '#examStart button', /ตรวจครั้งแรก/),
+      'exam tab lists the first exam and offers follow-up exams; a very-high-risk child in month 3 has the recall due', addRecall && addRecall.textContent);
+    ok(!!F.d.querySelector('#unlockBase') && F.d.querySelector('#vDate').disabled && [...F.d.querySelectorAll('#riskBody button')].every(b => b.disabled),
+      'the first exam opens locked from plan month 2 (R1 F-02)');
+    click(F.w, addRecall);
+    const sr = F.d.querySelector('#sealRet');
+    ok(F.d.querySelector('#vRound').value === 'recall' && !sr.hidden && /ซี่ 16/.test(sr.textContent) && /ซี่ 26/.test(sr.textContent) && !/ซี่ 36/.test(sr.textContent),
+      'recall exam opens with a sealant row for each tooth sealed since (16, 26)', sr.textContent);
+    ok(F.d.querySelector('#riskSec').hidden && /ความเสี่ยงใช้ผลประเมินครั้งก่อน .*เสี่ยงสูงมาก \(7 คะแนน\)/.test(F.d.querySelector('#examStart').textContent) && F.d.querySelector('#vExam').value === 'TEST-C1' && F.d.querySelector('#presetBtn').hidden && /ตรวจซ้ำตามนัด/.test(F.d.querySelector('#examTitle').textContent),
+      'recall: no risk questions, the last assessment is carried (D-78); examiner = ผู้บันทึก; no "7-year-old mouth" reset; the heading names the exam', F.d.querySelector('#examStart').textContent.slice(-160));
+    ok(F.d.querySelector('#pigiSkip').checked, 'PI/GI start as last time (skipped at the first exam) (D-78)');
+    click(F.w, F.d.querySelector('#archL .pno[aria-label^="ฟันแท้ 46"]'));
+    ok(F.d.querySelector('#archL .pno[aria-label^="ฟันแท้ 46"]').getAttribute('aria-pressed') === 'true', '46 marked erupted at the recall');
+    F.d.querySelector('#saveExamBtn').click();
+    ok(await until(() => /ยังไม่ได้ระบุสภาพสารเคลือบ ซี่ 16, 26/.test(toastText(F.d))) && F.d.querySelectorAll('#sealRet .is-missing').length === 2, 'save blocked until each sealant is stated', toastText(F.d));
+    click(F.w, [...F.d.querySelectorAll('#sealRet .seg[aria-label="สารเคลือบซี่ 16"] button')].find(b => b.textContent === 'หลุด'));
+    click(F.w, [...F.d.querySelectorAll('#sealRet .seg[aria-label="สารเคลือบซี่ 26"] button')].find(b => b.textContent === 'เต็มซี่'));
+    F.d.querySelector('#pigiSkip').checked = true; F.d.querySelector('#pigiSkip').dispatchEvent(new F.w.Event('change', { bubbles: true }));
+    ok(/สารเคลือบ 2\/2 ซี่/.test(F.d.querySelector('#saveMsg').textContent) && !/แบบประเมิน/.test(F.d.querySelector('#saveMsg').textContent), 'save bar counts the stated sealants, no risk count on a recall', F.d.querySelector('#saveMsg').textContent);
+    ok(/7s·0/.test(F.d.querySelector('#archU').textContent), 'the chart shows 16 as 7s (sealant lost, D-78)');
+    F.d.querySelector('#saveExamBtn').click();
+    ok(await until(() => /บันทึกผลตรวจติดตามแล้ว/.test(toastText(F.d))), 'recall exam saved', toastText(F.d));
+    ok(/\(174\) เดือนที่ 3/.test(toastText(F.d)) && /เคลือบซ้ำ ซี่ 16/.test(toastText(F.d)) && /เคลือบ ซี่ 46/.test(toastText(F.d)), 'it records service 174 in plan month 3 and adds a re-seal of 16 and a sealant for the new 46 to the plan', toastText(F.d));
+    const saved = (await api.from('exams').select('round,teeth').eq('study_id', fid).eq('round', 'recall')).data || [];
+    ok(saved.length === 1 && saved[0].teeth['16'].A === 7 && saved[0].teeth['16'].lost === 's' && saved[0].teeth['26'].A === 2, 'the exam row: round recall, 16 lost (A 7, lost s), 26 full (A 2)', JSON.stringify(saved.map(x => [x.round, x.teeth['16'], x.teeth['26']])));
+    click(F.w, F.d.querySelector('#ft-plan'));
+    const rs = await until(() => planRow(F.d, /เคลือบหลุมร่องฟันซ้ำ ซี่ 16/));
+    ok(!!rs && !planRow(F.d, /เคลือบหลุมร่องฟันซ้ำ ซี่ 26/), 'plan has "เคลือบหลุมร่องฟันซ้ำ ซี่ 16" only');
+    ok(!!planRow(F.d, /เคลือบหลุมร่องฟัน ซี่ 46.*ผลตรวจติดตามพบว่าต้องเคลือบ/), 'plan has a sealant for 46, found at the follow-up (R1 F-04)');
+    const exRow = planRow(F.d, /ตรวจช่องปากและประเมินความเสี่ยง/);
+    ok(exRow && exRow.querySelectorAll('td')[2].querySelector('button[aria-pressed="true"]'), 'plan: recall exam cell of month 3 is done');
+    click(F.w, rs.querySelector('.anycol button'));
+    const resealDone = await until(() => [...F.d.querySelectorAll('#planGrid tbody tr')].find(tr => /เคลือบหลุมร่องฟันซ้ำ ซี่ 16/.test(tr.textContent) && tr.querySelector('.anycol button[aria-pressed="true"]')));
+    ok(!!resealDone, 'ticking the re-seal records it');
+    const pay = (await api.from('v_services_pay').select('code,tooth,service_date,project_pay,pay_note').eq('study_id', fid).eq('code', '171').eq('tooth', 16).order('id')).data || [];
+    ok(pay.length === 2 && !/หลุด|เคลือบแล้ว/.test(pay[1].pay_note || ''), 'the project does not refuse the re-seal (loss recorded, D-77)', JSON.stringify(pay));
+    click(F.w, F.d.querySelector('#ft-exam'));
+    click(F.w, await until(() => byText(F.d, '#examStart button', /^ตรวจครั้งแรก/)));
+    ok(F.d.querySelector('#vRound').value === 'baseline' && F.d.querySelector('#sealRet').hidden && !!F.d.querySelector('#unlockBase'), 'switching back shows the first exam, locked');
+    click(F.w, F.d.querySelector('#unlockBase'));
+    ok(!F.d.querySelector('#unlockBase') && !F.d.querySelector('#vDate').disabled, '"แก้ไขผลตรวจครั้งแรก" unlocks it after a confirm');
+    // the claims page offers 46 for a sealant now (R1 F-04)
+    click(F.w, F.d.querySelector('#t-claims'));
+    set(F.w, await until(() => F.d.querySelector('#cKid')), fid);
+    set(F.w, F.d.querySelector('#cCode'), '171');
+    ok([...F.d.querySelectorAll('#cTooth option')].some(o => o.value === '46'), 'claims: sealant can be recorded on 46', [...F.d.querySelectorAll('#cTooth option')].map(o => o.value).join());
+    // a saved recall turned into the 6-month round: its 174 goes (R1 F-08)
+    click(F.w, F.d.querySelector('#t-file'));
+    click(F.w, F.d.querySelector('#ft-exam'));
+    click(F.w, await until(() => byText(F.d, '#examStart button', /^ตรวจซ้ำตามนัด/)));
+    set(F.w, F.d.querySelector('#vRound'), 'm6');
+    ok(/ควรอยู่เดือนที่ 5–7/.test(F.d.querySelector('#examStart').textContent), 'a 6-month round dated in month 3 gets a hint', F.d.querySelector('#examStart').textContent.slice(-200));
+    F.d.querySelector('#saveExamBtn').click();
+    ok(await until(() => /ลบบริการตรวจ \(174\)/.test(toastText(F.d))), 'recall changed to the 6-month round: its 174 is removed', toastText(F.d));
+    const left174 = (await api.from('services').select('id').eq('study_id', fid).eq('code', '174').eq('service_date', daysAgo(0))).data || [];
+    ok(left174.length === 0, 'no 174 left on the exam date', JSON.stringify(left174));
+    // a 12-month round asks for "ตรวจครบทุกซี่แล้ว" under the chart before it saves (R1 F-05, R2-08)
+    click(F.w, await until(() => byText(F.d, '#examStart button', /\+ ตรวจรอบโครงการ 12 เดือน/)));
+    const okBox = F.d.querySelector('#chartOkBox');
+    ok(!okBox.hidden && /ตรวจครบทุกซี่แล้ว/.test(okBox.textContent) && okBox.compareDocumentPosition(F.d.querySelector('#archL')) & 2, 'the 12-month round shows "ตรวจครบทุกซี่แล้ว" below the chart', okBox.textContent);
+    ok(!F.d.querySelector('#riskSec').hidden && /ตอบแล้ว 0\/8/.test(F.d.querySelector('#riskChip').textContent), 'the 12-month round is the yearly risk assessment: questions start empty (D-78)');
+    F.d.querySelector('#saveExamBtn').click();
+    ok(await until(() => /ยังไม่ได้ติ๊ก "ตรวจครบทุกซี่แล้ว"/.test(toastText(F.d))), 'save blocked until the chart is confirmed', toastText(F.d));
+    click(F.w, F.d.querySelector('#discardBtn'));
+    // an open follow-up never follows its child's study ID to a new child (R1 F-01)
+    click(F.w, await until(() => byText(F.d, '#examStart button', /\+ ตรวจซ้ำตามนัด/)));
+    F.w.prompt = () => fid;
+    click(F.w, F.d.querySelector('#delKidBtn'));
+    ok(await until(() => /ลบแฟ้ม/.test(toastText(F.d)) && !F.d.querySelector('#kids').hidden), 'child with an open follow-up deleted', toastText(F.d));
+    click(F.w, byText(F.d, '#kids button', /ลงทะเบียนนักเรียน/));
+    set(F.w, F.d.querySelector('#enClass'), [...F.d.querySelectorAll('#enClass option')].find(o => o.value).value);
+    set(F.w, F.d.querySelector('#enSex'), 'M');
+    F.d.querySelector('#enBym').value = '2019-05';
+    F.d.querySelector('#enConsent').value = daysAgo(1);
+    F.d.querySelector('#enAssent').checked = true;
+    F.d.querySelector('#enForm').dispatchEvent(new F.w.Event('submit', { bubbles: true, cancelable: true }));
+    ok(await until(() => !F.d.querySelector('#file').hidden && /TC-\d{3}/.test(F.d.querySelector('#fileHead').textContent)), 'next child enrolled', F.d.querySelector('#enMsg').textContent);
+    click(F.w, F.d.querySelector('#ft-exam'));
+    ok(await until(() => byText(F.d, '#examStart button', /เริ่มบันทึกผลตรวจครั้งแรก/)) && F.d.querySelector('#saveBar').hidden,
+      `the new child (${(F.d.querySelector('#fileHead').textContent.match(/TC-\d{3}/) || [])[0]}, deleted one ${fid}) starts at its first exam`);
+    ok(F.errors.length === 0, 'no script errors (follow-up exam)', F.errors.join(' | '));
+  }
 
   console.log('warnings by NHSO fiscal year and the reseal rule (D-77)');
   // Pure check of txFlags on made-up services in a page whose app.js also hands txFlags out; the server pays by the
