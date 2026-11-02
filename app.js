@@ -134,8 +134,13 @@ function typicalMouth() {
 }
 // PI/GI start empty: a skipped section must not look like a real score of 0 (R1-14).
 const emptyPigi = () => Object.fromEntries(PIGI_TEETH.map(t => [t, { pi: null, gi: null }]));
-const pigiFilled = k => PIGI_TEETH.reduce((n, t) => n + (k.pigi[t].pi != null) + (k.pigi[t].gi != null), 0);   // of 12
-const pigiMean = (k, idx) => { const v = PIGI_TEETH.map(t => k.pigi[t][idx]).filter(x => x != null); return v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2) : '–'; };
+// An index tooth is scored (PI and GI 0–3) or marked not erupted ('ne') / cannot assess ('na'); means use scored teeth
+// only (Percy 2 Nov: some children have only 3 of the 6).
+const PIGI_POS = { '16B': 16, '11La': 11, '26B': 26, '46Li': 46, '31La': 31, '36Li': 36 };
+const PIGI_X = { ne: 'ยังไม่ขึ้น', na: 'ตรวจไม่ได้' };
+const pigiDone = k => PIGI_TEETH.filter(t => k.pigi[t].x || (k.pigi[t].pi != null && k.pigi[t].gi != null)).length;   // of 6
+const pigiScored = k => PIGI_TEETH.filter(t => !k.pigi[t].x && k.pigi[t].pi != null && k.pigi[t].gi != null).length;
+const pigiMean = (k, idx) => { const v = PIGI_TEETH.filter(t => !k.pigi[t].x).map(t => k.pigi[t][idx]).filter(x => x != null); return v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2) : '–'; };
 
 /* ================================================================ clinical logic (v0.7; dental team validates, WS2-3) */
 function riskScore(k) { let s = 0; for (const q of RISK) if (q.id) s += k.risk[q.id] === 'y' ? q.y : q.n; return s; }
@@ -355,6 +360,7 @@ function applyExam(k, ex) {
   k.teeth = ex && ex.attended ? clone(ex.teeth) : null;
   k.pigi = ex && ex.attended && ex.pigi && Object.keys(ex.pigi).length ? { ...emptyPigi(), ...clone(ex.pigi) } : emptyPigi();
   k.pigiSkip = !!(ex && ex.attended && !(ex.pigi && Object.keys(ex.pigi).length));   // saved as {} = PI/GI not done (R1-14)
+  k.pigiAuto = new Set();   // index teeth marked "ยังไม่ขึ้น" from the tooth chart, not by the examiner
   k.showMiss = false;   // after a failed save, mark every missing item (R1-04)
   k.urgent = { pain: false, swell: false, big: false, ...(ex ? ex.urgent : {}) };
   k.needOv = ex ? clone(ex.need_override) : {};
@@ -1053,7 +1059,7 @@ async function deleteChild(k) {
 function startExam(k) {
   const u = unit();
   k.editing = true; k.dirty = true;
-  k.teeth = typicalMouth(); k.risk = {}; k.pigi = emptyPigi(); k.pigiSkip = false; k.showMiss = false; k.urgent = { pain: false, swell: false, big: false }; k.needOv = {}; k.ovReason = {}; k.flOv = null;
+  k.teeth = typicalMouth(); k.risk = {}; k.pigi = emptyPigi(); k.pigiAuto = new Set(); k.pigiSkip = false; k.showMiss = false; k.urgent = { pain: false, swell: false, big: false }; k.needOv = {}; k.ovReason = {}; k.flOv = null;
   // The examiner is the chosen "ผู้บันทึก" or nobody: never the first code in the list (R1-02).
   k.examDate = new Date(TODAY); k.examiner = u.examiners.includes(S.prov) ? S.prov : ''; k.place = 'van';
   S.sel = 16;
@@ -1226,15 +1232,31 @@ $('#presetBtn').addEventListener('click', () => {
   k.teeth = typicalMouth(); k.needOv = {}; k.ovReason = {}; afterExamChange();
 });
 $$('#urgent input').forEach(b => b.addEventListener('change', () => { curKid().urgent[b.dataset.u] = b.checked; afterExamChange(); }));
-// PI/GI: all 12 boxes filled, or "ไม่ได้ตรวจ PI/GI ครั้งนี้" ticked (then saved as {}) (R1-14).
+// PI/GI: each index tooth scored or marked "ยังไม่ขึ้น" / "ตรวจไม่ได้", or "ไม่ได้ตรวจ PI/GI ครั้งนี้" ticked (then
+// saved as {}) (R1-14). While editing, a tooth the chart shows as not erupted starts as "ยังไม่ขึ้น".
 function renderPigi(k) {
   const tb = $('#pigiBody'); tb.replaceChildren();
   setIf('#pigiSkip', 'checked', !!k.pigiSkip);
+  if (k.editing && k.teeth) for (const t of PIGI_TEETH) {
+    const g = k.pigi[t], absent = k.teeth[PIGI_POS[t]].t === 'n';
+    if (absent && !g.x && g.pi == null && g.gi == null) { k.pigi[t] = { pi: null, gi: null, x: 'ne' }; k.pigiAuto.add(t); }
+    else if (!absent && k.pigiAuto.has(t) && g.x === 'ne') { k.pigi[t] = { pi: null, gi: null }; k.pigiAuto.delete(t); }
+  }
+  const st = el('tr', {}, el('th', { scope: 'row', text: 'สถานะฟัน' }));
+  for (const t of PIGI_TEETH) {
+    const x = k.pigi[t].x || '';
+    st.append(el('td', { class: 'num' }, el('select', {
+      'aria-label': `สถานะ ${t}`, disabled: k.pigiSkip ? true : null,
+      onchange: e => { const lab = e.target.getAttribute('aria-label'); k.pigiAuto.delete(t); k.pigi[t] = e.target.value ? { pi: null, gi: null, x: e.target.value } : { pi: null, gi: null }; k.dirty = true; renderExam(); syncSaveBar(); refocus('#pigiBody select', lab); },
+    }, el('option', { value: '', text: 'ตรวจ', selected: !x }), ...Object.entries(PIGI_X).map(([v, th]) => el('option', { value: v, text: th, selected: x === v })))));
+  }
+  st.append(el('td', { class: 'num small', text: k.pigiSkip ? '' : `ตรวจ ${pigiScored(k)}/6 ซี่` }));
+  tb.append(st);
   for (const [idx, lab] of [['pi', 'PI คราบจุลินทรีย์'], ['gi', 'GI เหงือกอักเสบ']]) {
     const tr = el('tr', {}, el('th', { scope: 'row', text: lab }));
     for (const t of PIGI_TEETH) {
-      const cur = k.pigi[t][idx];
-      tr.append(el('td', { class: 'num' }, el('select', {
+      const cur = k.pigi[t][idx], off = !!k.pigi[t].x;
+      tr.append(el('td', { class: 'num' }, off ? el('span', { class: 'muted small', text: PIGI_X[k.pigi[t].x] }) : el('select', {
         'aria-label': `${idx.toUpperCase()} ${t}`, disabled: k.pigiSkip ? true : null, class: k.showMiss && !k.pigiSkip && cur == null ? 'is-missing' : null,
         onchange: e => { const lab = e.target.getAttribute('aria-label'); k.pigi[t][idx] = e.target.value === '' ? null : +e.target.value; k.dirty = true; renderExam(); syncSaveBar(); refocus('#pigiBody select', lab); },
       }, el('option', { value: '', text: '–', selected: cur == null }), ...[0, 1, 2, 3].map(v => el('option', { value: String(v), text: String(v), selected: cur === v })))));
@@ -1261,8 +1283,8 @@ function renderSummary(k, lvl, score, urg, refTeeth, answered) {
   const fpmUp = FPM.filter(p => k.teeth[p].t === 'p').length;
   const part = FPM.filter(p => k.teeth[p].t === 'p' && k.teeth[p].partial).length;
   const fpmSeal = FPM.filter(p => k.teeth[p].t === 'p' && needOf(p, k) === 2).length;
-  const nPigi = pigiFilled(k);
-  const pigiText = k.pigiSkip ? 'ไม่ได้ตรวจ' : nPigi ? `${pigiMean(k, 'pi')} · ${pigiMean(k, 'gi')}${nPigi < 12 ? ` (กรอก ${nPigi}/12)` : ''}` : 'ยังไม่ได้กรอก';
+  const nPigi = pigiDone(k), nScored = pigiScored(k);
+  const pigiText = k.pigiSkip ? 'ไม่ได้ตรวจ' : nScored ? `${pigiMean(k, 'pi')} · ${pigiMean(k, 'gi')} (ตรวจ ${nScored}/6 ซี่${nPigi < 6 ? ` · ยังไม่ครบ ${6 - nPigi} ซี่` : ''})` : nPigi === 6 ? 'ไม่มีซี่ที่ตรวจได้' : 'ยังไม่ได้กรอก';
   const d0 = k.examDate || TODAY;
   $('#summary').replaceChildren(
     kv('ระดับความเสี่ยง', answered === 8 ? `${LEVEL[lvl].th} (${score})` : `ยังตอบไม่ครบ (${answered}/8)`), kv('dmft (ฟันน้ำนม)', String(ix.dmft)), kv('DMFT (ฟันแท้)', String(ix.DMFT)),
@@ -1276,11 +1298,11 @@ function renderSummary(k, lvl, score, urg, refTeeth, answered) {
 const examDateProblem = k => (!k.examDate ? 'ใส่วันที่ตรวจ' : dateProblem(toInput(k.examDate), 'วันที่ตรวจ'));
 // Everything that still blocks saving the exam, in screen order.
 function examProblems(k) {
-  const out = [], a = riskAnswered(k), n = pigiFilled(k), dp = examDateProblem(k);
+  const out = [], a = riskAnswered(k), n = pigiDone(k), dp = examDateProblem(k);
   if (dp) out.push(dp);
   if (!k.examiner) out.push('ยังไม่ได้เลือกรหัสผู้ตรวจ');
   if (a < 8) out.push(`แบบประเมินความเสี่ยงตอบแล้ว ${a}/8 ข้อ`);
-  if (!k.pigiSkip && n < 12) out.push(`PI/GI กรอกแล้ว ${n}/12 ช่อง (หรือติ๊ก "ไม่ได้ตรวจ PI/GI ครั้งนี้")`);
+  if (!k.pigiSkip && n < 6) out.push(`PI/GI ครบ ${n}/6 ซี่ (กรอกคะแนน หรือเลือกสถานะ "ยังไม่ขึ้น" / "ตรวจไม่ได้" หรือติ๊ก "ไม่ได้ตรวจ PI/GI ครั้งนี้")`);
   return out;
 }
 // The save bar always says what is left (R1-04).
@@ -1290,7 +1312,7 @@ function syncSaveBar() {
   $('#saveBar').hidden = !on;
   if (!on) return;
   const left = examProblems(k).length;
-  $('#saveMsg').textContent = `ยังไม่บันทึก · แบบประเมิน ${riskAnswered(k)}/8 ข้อ · PI/GI ${k.pigiSkip ? 'ไม่ได้ตรวจ' : pigiFilled(k) + '/12'} · ผู้ตรวจ ${k.examiner || 'ยังไม่เลือก'}${left ? '' : ' · ครบแล้ว กดบันทึกผลตรวจ'}`;
+  $('#saveMsg').textContent = `ยังไม่บันทึก · แบบประเมิน ${riskAnswered(k)}/8 ข้อ · PI/GI ${k.pigiSkip ? 'ไม่ได้ตรวจ' : pigiDone(k) + '/6 ซี่'} · ผู้ตรวจ ${k.examiner || 'ยังไม่เลือก'}${left ? '' : ' · ครบแล้ว กดบันทึกผลตรวจ'}`;
 }
 function hideSaveBar() { $('#saveBar').hidden = true; }
 $('#discardBtn').addEventListener('click', () => { const k = curKid(); if (!k) return; discardExam(k); toast('ยกเลิกการแก้ไขแล้ว'); renderFile(); });
@@ -1542,7 +1564,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.2.3', '_blank');
+  const w = window.open('booklet.html?v=1.2.4', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 

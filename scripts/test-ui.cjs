@@ -43,8 +43,10 @@ const noNull = d => !/\bnull\b|\bundefined\b/.test(d.body.textContent);   // R1-
 const toastText = d => d.querySelector('#toast').textContent;
 // Answer the 8 risk items (fluoride toothpaste and plaque "yes", the rest "no").
 function answerRisk(w, d) { for (const tr of d.querySelectorAll('#riskBody tr:not(.sec)')) { const b = [...tr.querySelectorAll('button')]; click(w, /ฟลูออไรด์/.test(tr.textContent) ? b[0] : (/คราบจุลินทรีย์/.test(tr.textContent) ? b[0] : b[1])); } }
-// Fill all 12 PI/GI boxes; the table re-renders after each change, so look the box up again each time.
-function fillPigi(w, d, v = '1') { for (let i = 0; i < 12; i++) set(w, d.querySelectorAll('#pigiBody select')[i], v); }
+// Fill every PI/GI score box still on screen (teeth marked "ยังไม่ขึ้น"/"ตรวจไม่ได้" have none); the table re-renders
+// after each change, so look the boxes up again each time.
+const pigiBoxes = d => [...d.querySelectorAll('#pigiBody select')].filter(s => /^(PI|GI) /.test(s.getAttribute('aria-label')));
+function fillPigi(w, d, v = '1') { for (let i = 0; i < 12; i++) { const b = pigiBoxes(d).find(x => x.value === ''); if (!b) break; set(w, b, v); } }
 // Very high risk (score 7): white spot, plaque and sugar "yes", fluoride toothpaste "no", the rest "no".
 function answerRiskHigh(w, d) { for (const tr of d.querySelectorAll('#riskBody tr:not(.sec)')) { const b = [...tr.querySelectorAll('button')]; click(w, /ขาวขุ่น|คราบจุลินทรีย์|น้ำตาล/.test(tr.textContent) ? b[0] : b[1]); } }
 const iso = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
@@ -131,7 +133,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(await until(() => !d.querySelector('#examBody').hidden && d.querySelectorAll('#archU .tooth').length === 12 && d.querySelectorAll('#archL .tooth').length === 12), 'tooth chart: 12 positions per jaw');
   ok(!d.querySelector('#saveBar').hidden, 'save bar appears for unsaved exam');
   ok(d.querySelector('#vExam').value === 'TEST-B2', 'examiner = the chosen "ผู้บันทึก", not the first code (R1-02)', d.querySelector('#vExam').value);
-  ok(/แบบประเมิน 0\/8 ข้อ · PI\/GI 0\/12/.test(d.querySelector('#saveMsg').textContent), 'save bar says what is left (R1-04)', d.querySelector('#saveMsg').textContent);
+  ok(/แบบประเมิน 0\/8 ข้อ · PI\/GI 0\/6 ซี่/.test(d.querySelector('#saveMsg').textContent), 'save bar says what is left (R1-04)', d.querySelector('#saveMsg').textContent);
   ok([...d.querySelectorAll('#pigiBody select')].every(s => s.value === ''), 'PI/GI boxes start empty (R1-14)');
   d.querySelector('#saveExamBtn').click();
   ok(await until(() => /ตอบแล้ว \d\/8/.test(toastText(d))), 'save blocked until 8 risk answers', toastText(d));
@@ -147,11 +149,14 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   click(w, d.querySelector('#toothNext'));
   ok(/ตำแหน่ง 16/.test(d.querySelector('#editor h4').textContent), '"ซี่ถัดไป" steps from 36 to 16 (R1-06)', d.querySelector('#editor h4').textContent);
   d.querySelector('#saveExamBtn').click();
-  ok(await until(() => /PI\/GI กรอกแล้ว 0\/12/.test(toastText(d))), 'save blocked until PI/GI is filled or skipped (R1-14)', toastText(d));
-  set(w, d.querySelectorAll('#pigiBody select')[0], '1');
+  ok(await until(() => /PI\/GI ครบ 0\/6 ซี่/.test(toastText(d))), 'save blocked until PI/GI is filled or skipped (R1-14)', toastText(d));
+  set(w, pigiBoxes(d)[0], '1');
   ok(d.activeElement && d.activeElement.getAttribute('aria-label') === 'PI 16B', 'focus stays on the PI/GI box after it re-renders (R2-06)', d.activeElement && d.activeElement.tagName);
+  // an index tooth that has not erupted is marked instead of scored, and left out of the means (Percy 2 Nov)
+  set(w, d.querySelector('#pigiBody select[aria-label="สถานะ 11La"]'), 'ne');
+  ok(!d.querySelector('#pigiBody select[aria-label="PI 11La"]') && /ยังไม่ขึ้น/.test(d.querySelector('#pigiBody').textContent), 'PI/GI: "ยังไม่ขึ้น" replaces the score boxes of that tooth');
   fillPigi(w, d);
-  ok(/1\.00 · 1\.00/.test(d.querySelector('#summary').textContent), 'PI/GI means over filled boxes', d.querySelector('#summary').textContent);
+  ok(/1\.00 · 1\.00 \(ตรวจ 5\/6 ซี่\)/.test(d.querySelector('#summary').textContent), 'PI/GI means over the 5 scored teeth', d.querySelector('#summary').textContent);
   d.querySelector('#saveExamBtn').click();
   ok(await until(() => d.querySelector('#saveBar').hidden && !d.querySelector('#fp-plan').hidden), 'exam saved; plan opens', toastText(d));
   ok(await until(() => /บันทึกบริการตรวจช่องปาก \(174\) เดือนที่ 1/.test(toastText(d))), 'first exam records service 174 (R1-03)', toastText(d));
