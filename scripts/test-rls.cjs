@@ -178,6 +178,8 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   ok(!sc.error && sc.data, 'unit submits its cohort', sc.error && sc.error.message);
   const dLocked = await C.rpc('delete_child', { p_study_id: kd });
   ok(!!dLocked.error && /cohort/.test(dLocked.error.message), 'after the cohort, deleting is refused', dLocked.error && dLocked.error.message);
+  const vLocked = await C.rpc('set_van_fills', { p_fills: true });
+  ok(!!vLocked.error, 'after the cohort, the unit cannot change "van can fill"');
   const ro = await RS.rpc('reopen_cohort', { p_unit: 'public-ffs' });
   const roU = await C.rpc('reopen_cohort', { p_unit: 'public-ffs' });
   ok(!ro.error && !!roU.error, 'research reopens the cohort; a unit cannot');
@@ -209,6 +211,35 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const sC = await C.storage.from('slips').createSignedUrl(slipPath, 60);
   const sB = await B.storage.from('slips').createSignedUrl(slipPath, 60);
   ok(!sC.error && sC.data && !!sB.error, 'the unit opens its own slip; another unit cannot', sB.error ? '' : 'B got a URL');
+
+  console.log('unit set-up: can the van fill');
+  const vB = await B.rpc('set_van_fills', { p_fills: true });
+  const vBrow = (await B.from('units').select('van_fills').eq('id', 'public-cap').single()).data;
+  ok(!vB.error && vBrow.van_fills === true, 'a unit says its van can fill', vB.error && vB.error.message);
+  const vBother = await B.rpc('set_unit_van_fills', { p_unit: 'public-ffs', p_fills: true });
+  ok(!!vBother.error, "a unit cannot set another unit's setting");
+  const vR = await RS.rpc('set_unit_van_fills', { p_unit: 'public-cap', p_fills: null });
+  const vRrow = (await RS.from('units').select('van_fills').eq('id', 'public-cap').single()).data;
+  ok(!vR.error && vRrow.van_fills === null, 'research can reset it');
+
+  console.log('activity evidence (D-62)');
+  const evPath = `public-ffs/${gid}/test-${Date.now()}.pdf`;
+  const evUp = await C.storage.from('evidence').upload(evPath, new Blob(['%PDF-1.4 evidence'], { type: 'application/pdf' }), { contentType: 'application/pdf' });
+  const evRow = await C.from('evidence').insert({ unit_id: 'public-ffs', group_id: gid, path: evPath, file_name: 'test.pdf' }).select().single();
+  ok(!evUp.error && !evRow.error, 'a unit uploads evidence for its group activity', (evUp.error || evRow.error || {}).message);
+  const evOther = await B.storage.from('evidence').upload(`public-ffs/${gid}/b-${Date.now()}.pdf`, new Blob(['x'], { type: 'application/pdf' }), { contentType: 'application/pdf' });
+  const evRowOther = await B.from('evidence').insert({ unit_id: 'public-ffs', group_id: gid, path: `public-ffs/${gid}/b.pdf` });
+  ok(!!evOther.error && !!evRowOther.error, "another unit cannot add evidence to C's folder");
+  const evBad = await C.from('evidence').insert({ unit_id: 'public-ffs', group_id: gid, path: `public-cap/${gid}/x.pdf` });
+  ok(!!evBad.error, 'the file path must sit in the unit and activity folder');
+  const evB = await B.from('evidence').select('id').eq('path', evPath);
+  const evBurl = await B.storage.from('evidence').createSignedUrl(evPath, 60);
+  const evR = await RS.from('evidence').select('id').eq('path', evPath);
+  const evRurl = await RS.storage.from('evidence').createSignedUrl(evPath, 60);
+  ok(evB.data.length === 0 && !!evBurl.error && evR.data.length === 1 && !evRurl.error, 'research sees the evidence; another unit does not');
+  const evRm = await C.storage.from('evidence').remove([evPath]);
+  const evDel = await C.from('evidence').delete().eq('id', evRow.data.id).select();
+  ok(!evRm.error && !evDel.error && evDel.data.length === 1, 'the unit removes a file uploaded by mistake');
 
   console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kaU}, ${kaN}`);
   process.exit(fail ? 1 : 0);

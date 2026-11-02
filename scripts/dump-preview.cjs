@@ -7,7 +7,7 @@ const a = JSON.parse(fs.readFileSync(path.join(__dirname, 'test-accounts.local.j
 (async () => {
   const { data: s, error } = await c.auth.signInWithPassword({ email: a.email, password: a.password }); if (error) throw error;
   const out = { me: { id: s.user.id } };
-  for (const t of ['staff', 'units', 'schools', 'examiners', 'price_list', 'children', 'exams', 'services', 'transfers', 'v_services_pay']) { const r = await c.from(t).select('*'); if (r.error) throw r.error; out[t] = r.data; }
+  for (const t of ['staff', 'units', 'schools', 'examiners', 'price_list', 'children', 'exams', 'services', 'transfers', 'v_services_pay', 'evidence']) { const r = await c.from(t).select('*'); if (r.error) throw r.error; out[t] = r.data; }
   fs.writeFileSync(path.join(__dirname, 'preview-data.local.js'), 'window.MOCK = ' + JSON.stringify(out) + ';\n');
   console.log(Object.entries(out).map(([k, v]) => `${k}:${Array.isArray(v) ? v.length : 1}`).join(' '));
 })().catch(e => { console.error(e); process.exit(1); });

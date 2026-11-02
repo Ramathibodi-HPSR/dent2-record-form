@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=1.1.1">
-<link rel="stylesheet" href="app.css?v=1.1.1">
+<link rel="stylesheet" href="style.css?v=1.2.0">
+<link rel="stylesheet" href="app.css?v=1.2.0">
 </head>
 <body>
 <header class="topbar">
@@ -22,7 +22,7 @@
       <button class="btn btn--ghost" type="button" id="logoutBtn">ออกจากระบบ</button>
     </span>
     <a class="btn btn--ghost guide-link" href="guide.html" target="_blank" rel="noopener">คู่มือ</a>
-    <span class="draft" id="verTag">v1.1</span>
+    <span class="draft" id="verTag">v1.2</span>
   </div>
   <nav class="wrap tabs" id="tabs" role="tablist" aria-label="หน้าจอ" hidden></nav>
 </header>
@@ -295,7 +295,8 @@
       <fieldset class="rooms" id="gRooms"><legend class="small muted">ห้อง</legend></fieldset>
       <div class="row"><button class="btn" type="button" id="gAll">ทำให้ทุกคน</button><button class="linkbtn" type="button" id="gNone">ล้างรายชื่อ</button><span class="small muted" id="gCount"></span></div>
       <div class="plist" id="gList" aria-label="ผู้เข้าร่วม"></div>
-      <p class="small muted">หลักฐาน: รูปกิจกรรมและรายชื่อที่ครูประจำชั้นลงนาม เก็บไว้ที่หน่วย การแนบไฟล์ในระบบอยู่ในรุ่นถัดไป</p>
+      <label class="field">หลักฐาน: รูปกิจกรรม และรายชื่อนักเรียนที่ครูประจำชั้นลงนาม (เลือกได้หลายไฟล์ รูปหรือ PDF ไม่เกิน 10 MB ต่อไฟล์)<input id="gFiles" type="file" multiple accept="image/jpeg,image/png,image/webp,image/heic,application/pdf"></label>
+      <p class="small pdpa" id="gPdpa">* กรุณาอัปโหลดรูปที่ไม่เห็นหน้าเด็ก หรือระบุตัวเด็กไม่ได้ ตามหลัก PDPA รายชื่อที่ครูลงนามให้ใช้รหัสนักเรียนแทนชื่อ หรือปิดชื่อก่อนถ่าย แนบเพิ่มภายหลังได้ที่ปุ่ม "หลักฐาน" ในรายการด้านล่าง</p>
       <div class="preview" id="gPreview" aria-live="polite"></div>
       <div class="row"><button class="btn btn--primary" type="submit" id="gSave">บันทึกกิจกรรม</button></div>
     </form>
@@ -335,7 +336,7 @@
 <div class="tip-float" id="ftip" role="tooltip" hidden></div>
 
 <script src="vendor/supabase.js"></script>
-<script src="config.js?v=1.1.1"></script>
-<script src="app.js?v=1.1.1"></script>
+<script src="config.js?v=1.2.0"></script>
+<script src="app.js?v=1.2.0"></script>
 </body>
 </html>

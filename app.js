@@ -399,10 +399,10 @@ function reindex(u) {
 function sortKids(u) { u.kids.sort((a, b) => a.id.localeCompare(b.id)); }
 
 async function loadAll() {
-  const [units, schools, examiners, prices, children, exams, services, transfers, pay] = await Promise.all([
+  const [units, schools, examiners, prices, children, exams, services, transfers, pay, evidence] = await Promise.all([
     fetchAll('units', ['letter']), fetchAll('schools', ['id']), fetchAll('examiners', ['code']), fetchAll('price_list', ['code', 'valid_from']),
     fetchAll('children', ['study_id']), fetchAll('exams', ['id']), fetchAll('services', ['service_date', 'id']),
-    fetchAll('transfers', ['paid_on', 'id']), fetchAll('v_services_pay', ['service_date', 'id']),
+    fetchAll('transfers', ['paid_on', 'id']), fetchAll('v_services_pay', ['service_date', 'id']), fetchAll('evidence', ['id']),
   ]);
   PRICE = {};
   const today = toInput(TODAY);
@@ -411,7 +411,7 @@ async function loadAll() {
     PRICE[p.code] = { name: p.name, short: p.short, unit: p.unit, lc: +p.price_lc, full: +p.price_full, tooth: p.tooth_rule, group: p.group_kind, unpriced: p.unpriced, outside: p.outside, nhso: +(p.nhso_rate || 0) };
   }
   S.units = {};
-  for (const r of units) S.units[r.id] = { ...r, schools: [], examiners: [], kids: [], byId: {}, tx: [], txByKid: {}, exams: [], transfers: [] };
+  for (const r of units) S.units[r.id] = { ...r, schools: [], examiners: [], kids: [], byId: {}, tx: [], txByKid: {}, exams: [], transfers: [], evidence: new Map() };
   for (const s of schools) S.units[s.unit_id]?.schools.push(s);
   for (const x of examiners) if (x.active) S.units[x.unit_id]?.examiners.push(x.code);
   const examBy = {};
@@ -419,6 +419,7 @@ async function loadAll() {
   for (const c of children) { const u = S.units[c.unit_id]; if (!u) continue; const k = kidFrom(c, examBy[c.study_id]); u.kids.push(k); u.byId[k.id] = k; }
   for (const s of services) S.units[s.unit_id]?.tx.push(txFrom(s));
   for (const t of transfers) S.units[t.unit_id]?.transfers.push(t);
+  for (const ev of evidence) { const u = S.units[ev.unit_id]; if (u) (u.evidence.get(ev.group_id) || u.evidence.set(ev.group_id, []).get(ev.group_id)).push(ev); }
   Object.values(S.units).forEach(reindex);
   setPay(pay); payVer = S.txVer;
 }
@@ -497,11 +498,11 @@ async function afterLogin() {
     ps.classList.toggle('is-missing', !S.prov);
     $('#provBox').hidden = false;
     S.kid = null;   // the file tab waits for a chosen child (R1-19)
-    $('#verTag').textContent = u.is_test ? 'v1.1 · หน่วยทดสอบ' : 'v1.1';
+    $('#verTag').textContent = u.is_test ? 'v1.2 · หน่วยทดสอบ' : 'v1.2';
   } else {
     fill(chip, el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
     $('#provBox').hidden = true;
-    $('#verTag').textContent = 'v1.1';
+    $('#verTag').textContent = 'v1.2';
   }
   $('#acctBox').hidden = false;
   show(S.me.role === 'unit' ? 'home' : 'research');
@@ -521,7 +522,7 @@ async function logout(reason) {
   await sb.auth.signOut();
   Object.assign(S, { me: null, units: {}, acct: null, kid: null, editId: null, prov: '' });
   $('#tabs').hidden = true; $('#acctBox').hidden = true; hideSaveBar();
-  $('#verTag').textContent = 'v1.1';
+  $('#verTag').textContent = 'v1.2';
   show('login');
   if (reason) $('#lgMsg').replaceChildren(el('div', { class: 'hint', text: reason }));
 }
@@ -667,14 +668,14 @@ function moneySection(u) {
   if (u.arm !== 'control') {
     notes.push(`ที่มาของยอด: แผนการดูแลตามอัตราค่าบริการ ${fmt(b.plan)} บาท` + (u.van_fills === true ? ` + อุดฟัน ${b.fillN} ซี่ ${fmt(b.fill)} บาท` : '')
       + (u.arm === 'ffs' ? ' แล้วบวกส่วนเพิ่ม 20%' : '') + ` − ส่วนที่เบิกจาก สปสช. ${fmt(b.nhso)} บาท`);
-    if (u.van_fills == null && b.fillN) notes.push(`ยังไม่รวมค่าอุดฟัน ${b.fillN} ซี่ (${fmt(b.fill)} บาท) รอทีมวิจัยยืนยันว่ารถทันตกรรมของหน่วยอุดฟันได้`);
+    if (u.van_fills == null && b.fillN) notes.push(`ยังไม่รวมค่าอุดฟัน ${b.fillN} ซี่ (${fmt(b.fill)} บาท) จนกว่าหน่วยจะตั้งค่าว่ารถทันตกรรมอุดฟันได้ (ด้านบน)`);
     if (u.van_fills === false) notes.push('รถทันตกรรมของหน่วยอุดฟันไม่ได้ จึงไม่รวมค่าอุดฟัน นักเรียนที่ต้องอุดฟันส่งต่อตามระบบปกติของ สปสช.');
   }
   if (b.unknownCov) notes.push(`ยังไม่ระบุสิทธิการรักษา ${b.unknownCov} คน ระบบคิดเหมือนสิทธิ UC`);
   if (b.noCov) notes.push(`ไม่มีสิทธิรัฐ ${b.noCov} คน โครงการจ่ายเต็มอัตรา ไม่หักส่วนของ สปสช.`);
   notes.push('ยอดเปลี่ยนตามผลตรวจครั้งแรกที่บันทึก ทีมวิจัยตรวจยอดก่อนโอนทุกครั้ง');
   return el('section', {}, el('h3', { text: 'เงินของหน่วย' }), el('div', { class: 'tiles' }, ...tiles),
-    el('ul', { class: 'olist small muted' }, ...notes.map(t => el('li', { text: t }))), transfersBlock(u));
+    el('ul', { class: 'olist small muted' }, ...notes.map(t => el('li', { text: t })), vanLine(u)), transfersBlock(u));
 }
 function transfersBlock(u) {
   const list = [...u.transfers].sort((a, b) => b.paid_on.localeCompare(a.paid_on) || b.id - a.id);
@@ -711,6 +712,24 @@ async function openSlip(path) {
   if (error || !data) { if (w) w.close(); toastErr(error || { message: 'เปิดสลิปไม่ได้' }); return; }
   if (w) w.location = data.signedUrl; else window.location.assign(data.signedUrl);
 }
+// Unit set-up (Percy 2 Nov): the unit says whether its mobile dental unit can fill teeth. Fillings count in the
+// capitation and the ceiling only then (01, 02 §2). The unit can change it until it sends its cohort.
+async function setVanFills(u, v) {
+  const { error } = await sb.rpc('set_van_fills', { p_fills: v });
+  if (error) { toastErr(error); return; }
+  u.van_fills = v; toast(v ? 'บันทึกแล้ว: รถทันตกรรมของหน่วยอุดฟันได้' : 'บันทึกแล้ว: รถทันตกรรมของหน่วยอุดฟันไม่ได้'); renderHome();
+}
+function setupCard(u) {
+  if (S.me.role !== 'unit' || u.van_fills != null) return null;
+  return el('section', { class: 'card stack', id: 'setupCard' },
+    el('h3', { text: 'ตั้งค่าหน่วยครั้งแรก: รถทันตกรรมของหน่วยอุดฟันได้หรือไม่' }),
+    el('p', { class: 'small', text: 'อุดฟันได้: ค่าอุดฟันซี่ละ 360 บาท (อุด 1 ด้าน) รวมในค่าเหมาจ่ายหรือเพดานงบของหน่วย ตามจำนวนฟันแท้ที่ผลตรวจครั้งแรกระบุว่าต้องบูรณะ · อุดฟันไม่ได้: ไม่รวมค่าอุดฟัน ส่งต่อนักเรียนที่ต้องอุดฟันตามระบบปกติของ สปสช. · เปลี่ยนได้จนกว่าจะส่ง cohort' }),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn btn--primary', type: 'button', id: 'vanYes', text: 'อุดฟันได้', onclick: () => setVanFills(u, true) }),
+      el('button', { class: 'btn', type: 'button', id: 'vanNo', text: 'อุดฟันไม่ได้', onclick: () => setVanFills(u, false) })));
+}
+const vanLine = u => (u.van_fills == null ? null : el('li', {}, `รถทันตกรรมของหน่วย: ${u.van_fills ? 'อุดฟันได้' : 'อุดฟันไม่ได้'} `,
+  !u.cohort_submitted_at && S.me.role === 'unit' ? el('button', { class: 'linkbtn', type: 'button', text: 'เปลี่ยน', onclick: () => { if (confirm(`เปลี่ยนเป็น "${u.van_fills ? 'อุดฟันไม่ได้' : 'อุดฟันได้'}"?`)) setVanFills(u, !u.van_fills); } }) : null));
 // Cohort (Percy 2 Nov): until the unit submits it, children enrolled by mistake or for practice can be deleted.
 function cohortSection(u) {
   const n = u.kids.length, ex = u.kids.filter(examined).length;
@@ -738,6 +757,7 @@ function renderHome() {
   const schoolNames = u.schools.map(s => s.name).join(', ');
   $('#home').replaceChildren(
     transferBanner(u) || '',
+    setupCard(u) || '',
     el('section', {},
       el('div', { class: 'row between' },
         el('div', { class: 'stack' }, el('p', { class: 'eyebrow', text: `${schoolNames} · ลงทะเบียน ${n} คน` }), el('h1', { class: 'h-unit', text: u.name })),
@@ -1527,7 +1547,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.1.1', '_blank');
+  const w = window.open('booklet.html?v=1.2.0', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -1710,6 +1730,51 @@ $('#fOne').addEventListener('submit', async e => {
   if (ok) setIf('#cPlace', 'value', '');
   if (ok) { toast(`บันทึกแล้ว · ${k.id} · ${pname(code)}${tooth ? ' ซี่ ' + tooth : ''} · ${pf ? `ติ๊กในแผนให้แล้ว${pf.month ? ` (เดือนที่ ${pf.month}${pf.late ? ' ที่เลยกำหนด' : ''})` : ''}` : 'นอกแผน'}`); renderClaims(); }
 });
+// Activity evidence (D-62): photos and the teacher-signed class list, per group activity, in the private bucket
+// 'evidence'. Photos must not identify children (PDPA): the form says so at the upload.
+const EVIDENCE_CODES = ['175', '176', '177'];
+const evOf = (u, gid) => (gid && u.evidence.get(gid)) || [];
+async function uploadEvidence(u, gid, files) {
+  let n = 0;
+  for (const f of files) {
+    if (f.size > 10 * 1024 * 1024) { toast(`${f.name} ใหญ่เกิน 10 MB ไม่ได้แนบ`); continue; }
+    const ext = (f.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+    const path = `${u.id}/${gid}/${crypto.randomUUID()}.${ext}`;
+    const up = await sb.storage.from('evidence').upload(path, f, { contentType: f.type || undefined });
+    if (up.error) { toastErr(up.error); continue; }
+    const { data, error } = await sb.from('evidence').insert({ unit_id: u.id, group_id: gid, path, file_name: f.name.slice(0, 200) }).select().single();
+    if (error) { toastErr(error); continue; }
+    (u.evidence.get(gid) || u.evidence.set(gid, []).get(gid)).push(data); n++;
+  }
+  return n;
+}
+async function openEvidence(path) {
+  const w = window.open('', '_blank');
+  const { data, error } = await sb.storage.from('evidence').createSignedUrl(path, 300);
+  if (error || !data) { if (w) w.close(); toastErr(error || { message: 'เปิดไฟล์ไม่ได้' }); return; }
+  if (w) w.location = data.signedUrl; else window.location.assign(data.signedUrl);
+}
+// The evidence panel under a ledger row: view; the unit also adds or removes files.
+function evidencePanel(u, gid, cols, onChange) {
+  const list = evOf(u, gid), unitSide = S.me.role === 'unit';
+  const inp = unitSide ? el('input', { type: 'file', multiple: true, accept: 'image/jpeg,image/png,image/webp,image/heic,application/pdf', onchange: async e => {
+    const n = await uploadEvidence(u, gid, [...e.target.files]); if (n) toast(`แนบหลักฐานแล้ว ${n} ไฟล์`); onChange();
+  } }) : null;
+  return el('tr', { class: 'evrow' }, el('td', { colspan: String(cols) }, el('div', { class: 'stack' },
+    list.length ? el('ul', { class: 'olist small' }, ...list.map(ev => el('li', {},
+      el('button', { class: 'linkbtn', type: 'button', text: ev.file_name || 'ไฟล์', onclick: () => openEvidence(ev.path) }), ` · ${thShort(new Date(ev.created_at))} `,
+      unitSide ? el('button', { class: 'linkbtn', type: 'button', text: 'ลบ', onclick: async () => {
+        if (!confirm(`ลบไฟล์ ${ev.file_name || ''}?`)) return;
+        await sb.storage.from('evidence').remove([ev.path]);
+        const { error } = await sb.from('evidence').delete().eq('id', ev.id);
+        if (error) { toastErr(error); return; }
+        u.evidence.set(gid, evOf(u, gid).filter(x => x.id !== ev.id)); onChange();
+      } }) : null))) : el('p', { class: 'small muted', text: 'ยังไม่มีหลักฐาน' }),
+    unitSide ? el('label', { class: 'field' }, 'แนบไฟล์เพิ่ม (รูปหรือ PDF)', inp) : null,
+    unitSide ? el('p', { class: 'small pdpa', text: '* กรุณาอัปโหลดรูปที่ไม่เห็นหน้าเด็ก หรือระบุตัวเด็กไม่ได้ ตามหลัก PDPA รายชื่อใช้รหัสนักเรียนแทนชื่อ หรือปิดชื่อก่อนถ่าย' }) : null)));
+}
+const evButton = (u, gid, code, onClick) => (EVIDENCE_CODES.includes(code) && gid
+  ? el('button', { class: 'linkbtn', type: 'button', text: `หลักฐาน (${evOf(u, gid).length})`, onclick: onClick }) : null);
 // Per-person activities (176, 175) write a row for each child: only children with complete consent who have
 // not withdrawn. A per-session 177 counts the children ticked and stores no study ID (team decision on R1-20).
 const perPerson = code => !(PRICE[code] && PRICE[code].group === 'session');
@@ -1765,7 +1830,9 @@ $('#fGroup').addEventListener('submit', async e => {
   $('#gSave').disabled = true;
   const ok = await insertServices(rows);
   $('#gSave').disabled = false;
-  if (ok) { toast(rows.length === 1 && !rows[0].study_id ? `บันทึกกิจกรรมแล้ว · 1 รายการ ผู้เข้าร่วม ${n} คน` : `บันทึกกิจกรรมแล้ว · ${rows.length} รายการ`); S.gsel.clear(); renderClaims(); }
+  const files = $('#gFiles') ? [...$('#gFiles').files] : [];
+  const nf = ok && files.length ? await uploadEvidence(u, gid, files) : 0;
+  if (ok) { setIf('#gFiles', 'value', ''); toast((rows.length === 1 && !rows[0].study_id ? `บันทึกกิจกรรมแล้ว · 1 รายการ ผู้เข้าร่วม ${n} คน` : `บันทึกกิจกรรมแล้ว · ${rows.length} รายการ`) + (nf ? ` · แนบหลักฐาน ${nf} ไฟล์` : ' · ยังไม่ได้แนบหลักฐาน')); S.gsel.clear(); renderClaims(); }
 });
 function ledgerEntries(u) {
   const groups = new Map(), out = [];
@@ -1890,11 +1957,14 @@ function renderLedger() {
       plan = pm ? el('span', { class: 'chip chip--ok', text: pm.anytime ? 'ตามแผน' : `ตามแผน ด.${txMonth(k, x.tx)}` }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' });
     }
     const label = x.gid ? `กิจกรรมกลุ่ม ${pname(x.code)} (${x.n} คน)` : `${x.tx.kid || 'ทั้งโรงเรียน'} · ${pname(x.code)}`;
+    const gidOf = x.gid || (x.tx && x.tx.gid);
     const act = el('span', { class: 'row', style: 'gap:6px' },
+      evButton(u, gidOf, x.code, () => { S.evOpen = S.evOpen === gidOf ? null : gidOf; renderLedger(); }),
       x.status === 'returned' ? el('button', { class: 'linkbtn', type: 'button', text: 'ส่งใหม่', onclick: async () => { if (await setStatus(txs, 'submitted', 'ส่งใหม่แล้ว · รอทีมวิจัยตรวจ')) renderClaims(); } }) : null,
       txs.every(canEdit) ? el('button', { class: 'linkbtn', type: 'button', text: 'ลบ', onclick: () => deleteTx(txs, label) }) : null);
     tb.append(el('tr', {}, el('td', { text: thShort(x.date) }), el('td', {}, who), el('td', { class: 'wrapcell' }, svc), el('td', { class: 'mono', text: tooth }), el('td', {}, plan),
       el('td', { class: 'num' + (x.ref ? '' : ' amt-0') }, fmt2(x.ref), payNote(u, x.tx)), el('td', {}, statusEl(txs[0])), el('td', { text: x.by || '–' }), el('td', {}, act)));
+    if (gidOf && S.evOpen === gidOf) tb.append(evidencePanel(u, gidOf, 9, renderLedger));
   }
   if (!rows.length) tb.append(el('tr', {}, el('td', { colspan: '9', class: 'muted', text: u.tx.length ? 'ไม่มีรายการตรงกับตัวกรอง' : 'ยังไม่มีบริการที่บันทึก' })));
   $('#ledgerCount').textContent = `แสดง ${Math.min(rows.length, S.lf.limit)} จาก ${rows.length} รายการ (กิจกรรมกลุ่มรวมเป็นแถวเดียว)`;
@@ -1921,14 +1991,20 @@ function reviewSection(ids) {
     list.forEach(x => { x.tx.status = status; if (extra && 'return_note' in extra) x.tx.returnNote = extra.return_note; });
     toast(label); renderResearch();
   };
-  const tb = el('tbody');
-  for (const x of sub.slice(0, 200)) tb.append(el('tr', {},
+  const tb = el('tbody'), evShown = new Set();
+  for (const x of sub.slice(0, 200)) {
+    const gid = x.tx.gid, evN = evOf(x.u, gid).length, needEv = EVIDENCE_CODES.includes(x.tx.code) && gid;
+    tb.append(el('tr', {},
     el('td', { text: thShort(x.tx.date) }), el('td', { class: 'mono', text: x.u.letter }), el('td', { class: 'mono', text: x.tx.kid || 'กลุ่ม' }),
-    el('td', { class: 'wrapcell' }, pname(x.tx.code), ...notesOf(x).map(n => el('div', { class: 'tiny', style: 'color:var(--warn)', text: n }))), el('td', { class: 'mono', text: x.tx.tooth ? String(x.tx.tooth) : '–' }),
+    el('td', { class: 'wrapcell' }, pname(x.tx.code), ...notesOf(x).map(n => el('div', { class: 'tiny', style: 'color:var(--warn)', text: n })),
+      needEv && !evN ? el('div', { class: 'tiny', style: 'color:var(--warn)', text: 'ยังไม่แนบหลักฐาน (D-62)' }) : null,
+      needEv ? evButton(x.u, gid, x.tx.code, () => { S.evOpen = S.evOpen === gid ? null : gid; renderResearch(); }) : null), el('td', { class: 'mono', text: x.tx.tooth ? String(x.tx.tooth) : '–' }),
     el('td', { class: 'num' }, fmt2(txAmt(x.u, x.tx)), payNote(x.u, x.tx)),
     el('td', {}, el('span', { class: 'row', style: 'gap:6px' },
       el('button', { class: 'linkbtn', type: 'button', text: 'อนุมัติ', onclick: () => act([x], 'approved', 'อนุมัติแล้ว 1 รายการ') }),
       el('button', { class: 'linkbtn', type: 'button', text: 'ส่งกลับ', onclick: () => { const r = prompt('เหตุผลที่ส่งกลับ (หน่วยบริการเห็นข้อความนี้)'); if (r) act([x], 'returned', 'ส่งกลับแล้ว 1 รายการ', { return_note: r }); } })))));
+    if (needEv && S.evOpen === gid && !evShown.has(gid)) { evShown.add(gid); tb.append(evidencePanel(x.u, gid, 7, renderResearch)); }
+  }
   return el('section', {},
     el('h2', { text: 'ตรวจรายการเบิก' }),
     el('div', { class: 'row' },
@@ -1951,7 +2027,14 @@ function moneyTable(ids) {
       el('td', { class: 'num' }, u.arm === 'cap' ? `${fmt(b.cap)}` : u.arm === 'ffs' ? `${fmt(b.ceil)}` : '–', el('div', { class: 'tiny muted', text: u.arm === 'cap' ? 'เหมาจ่าย' : u.arm === 'ffs' ? 'เพดาน' : 'ไม่มีเพดาน' })),
       el('td', { class: 'num', text: u.arm === 'cap' ? '–' : fmt(c.claimed) }), el('td', { class: 'num', text: u.arm === 'cap' ? '–' : fmt(c.approved) }),
       el('td', { class: 'num', text: fmt(transferred(u)) }), el('td', { class: 'num', text: fmt(b.dataFee) }),
-      el('td', { text: u.van_fills === true ? 'ได้' : u.van_fills === false ? 'ไม่ได้' : 'ยังไม่ทราบ' }),
+      el('td', {}, S.me.role === 'research'
+        ? el('select', { 'aria-label': `รถทันตกรรม ${u.name} อุดฟันได้`, onchange: async e => {
+            const v = e.target.value === '' ? null : e.target.value === 'y';
+            const { error } = await sb.rpc('set_unit_van_fills', { p_unit: u.id, p_fills: v });
+            if (error) { toastErr(error); return; }
+            u.van_fills = v; toast('บันทึกแล้ว'); renderResearch();
+          } }, ...[['', 'ยังไม่ตั้ง'], ['y', 'ได้'], ['n', 'ไม่ได้']].map(([v, t]) => el('option', { value: v, text: t, selected: (u.van_fills == null ? '' : u.van_fills ? 'y' : 'n') === v })))
+        : (u.van_fills === true ? 'ได้' : u.van_fills === false ? 'ไม่ได้' : 'ยังไม่ตั้ง')),
       el('td', {}, u.cohort_submitted_at ? el('span', {}, thShort(new Date(u.cohort_submitted_at)), ' ',
         el('button', { class: 'linkbtn', type: 'button', text: 'เปิดใหม่', onclick: async () => {
           if (!confirm(`เปิด cohort ของ ${u.name} ใหม่? หน่วยจะลบแฟ้มนักเรียนได้อีกจนกว่าจะส่งใหม่`)) return;
@@ -1963,7 +2046,7 @@ function moneyTable(ids) {
   return el('section', {}, el('h2', { text: 'เงินแต่ละหน่วย' }),
     el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
       el('thead', {}, el('tr', {}, ...['หน่วย', 'ตรวจครั้งแรก', 'เหมาจ่าย / เพดาน', 'เบิกแล้ว', 'อนุมัติ รอโอน', 'โอนแล้ว', 'ค่าเก็บข้อมูลรอบ 1', 'รถอุดฟันได้', 'cohort'].map((h, i) => el('th', { scope: 'col', class: i >= 1 && i <= 6 ? 'num' : '', text: h })))), tb)),
-    el('p', { class: 'small muted', text: 'คำนวณจากผลตรวจครั้งแรก: เหมาจ่าย = แผนการดูแลตามอัตรา + อุดฟัน (ถ้ารถอุดฟันได้) − ส่วนที่เบิกจาก สปสช. · เพดาน = (แผน + อุดฟัน) × 1.2 − ส่วนที่เบิกจาก สปสช. · "รถอุดฟันได้" ตั้งค่าโดยทีมวิจัย' }));
+    el('p', { class: 'small muted', text: 'คำนวณจากผลตรวจครั้งแรก: เหมาจ่าย = แผนการดูแลตามอัตรา + อุดฟัน (ถ้ารถอุดฟันได้) − ส่วนที่เบิกจาก สปสช. · เพดาน = (แผน + อุดฟัน) × 1.2 − ส่วนที่เบิกจาก สปสช. · "รถอุดฟันได้" หน่วยตั้งเองตอนเริ่มใช้ ทีมวิจัยแก้ได้' }));
 }
 // The research team records a transfer with its slip; a claims transfer also marks that unit's approved services paid.
 // The unit sees it on its home page as a new transfer (Percy 2 Nov).

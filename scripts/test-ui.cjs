@@ -59,12 +59,16 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(await until(() => d.querySelector('#home .tiles')), 'home dashboard renders after login');
   ok(/หน่วยทดสอบ ข/.test(d.querySelector('#acctChip').textContent), 'account chip shows the unit');
   ok(noNull(d), 'no "null" text on the home screen (R1-01)');
-  ok(d.querySelector('#verTag').textContent === 'v1.1 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
+  ok(d.querySelector('#verTag').textContent === 'v1.2 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
   ok(d.querySelector('#provSel').value === '' && d.querySelector('#provSel').classList.contains('is-missing'), '"ผู้บันทึก" starts empty and marked (R1-02)');
   ok(d.querySelectorAll('#home .tile--link').length >= 3, 'home tiles open the student list (R1-19)');
   ok(/ค่าเหมาจ่ายรายหัวทั้งปี/.test(d.querySelector('#home').textContent) && /งวดแรก 70%/.test(d.querySelector('#home').textContent), 'home shows the capitation and its 70% first instalment (v1.1)');
   ok(/รายการโอนเงิน/.test(d.querySelector('#home').textContent) && /ค่าตอบแทนเก็บข้อมูลรอบ 1/.test(d.querySelector('#home').textContent), 'home lists transfers and the data-collection fee');
   ok(!!d.querySelector('#cohortBtn'), 'home offers "ส่ง cohort" while the cohort is open');
+  if (d.querySelector('#setupCard')) {
+    click(w, d.querySelector('#vanYes'));
+    ok(await until(() => !d.querySelector('#setupCard') && /รถทันตกรรมของหน่วย: อุดฟันได้/.test(d.querySelector('#home').textContent)), 'set-up card: the unit says its van can fill (v1.2)', toastText(d));
+  } else ok(/รถทันตกรรมของหน่วย: อุดฟัน/.test(d.querySelector('#home').textContent), 'home shows the van-filling setting (v1.2)');
   set(w, d.querySelector('#provSel'), 'TEST-B2');
   ok(!d.querySelector('#provSel').classList.contains('is-missing'), 'mark goes once a code is chosen');
   click(w, d.querySelector('#t-kids'));
@@ -250,6 +254,10 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   d.querySelector('#fGroup').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
   ok(await until(() => /บันทึกกิจกรรมแล้ว/.test(d.querySelector('#toast').textContent)), 'group activity saved', d.querySelector('#toast').textContent);
   ok(/กิจกรรมกลุ่ม/.test(d.querySelector('#ledgerBody').textContent), 'ledger shows the group row');
+  ok(!!d.querySelector('#gFiles') && /PDPA/.test(d.querySelector('#gPdpa').textContent), 'group form takes evidence files with the PDPA note (D-62)');
+  const evBtn = [...d.querySelectorAll('#ledgerBody button')].find(b => /^หลักฐาน \(\d+\)$/.test(b.textContent));
+  ok(!!evBtn, 'group rows have a "หลักฐาน" button');
+  if (evBtn) { click(w, evBtn); ok(await until(() => d.querySelector('#ledgerBody .evrow')), 'the evidence panel opens with an upload field and the PDPA note'); }
   ok(/ไม่มีสิทธิรัฐ: ไม่เบิก สปสช\./.test(d.querySelector('#ledgerBody').textContent), 'ledger notes the child with no public coverage');
   // a practice child is deleted before the cohort is sent (Percy 2 Nov)
   click(w, d.querySelector('#t-file'));
