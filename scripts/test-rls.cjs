@@ -1,5 +1,5 @@
 // API test of the record form against the TEST project: logins, row-level security, enrolment without personal
-// data (D-64), exams, services and the claims cycle (D-65), views, audit.
+// data (D-64), health coverage (D-68), exams, services and the claims cycle (D-65), views, audit.
 // Run: NODE_PATH=<dir with @supabase/supabase-js> node scripts/test-rls.cjs
 // Uses the test accounts in scripts/test-accounts.local.json (never real staff). Leaves its test children in place.
 const fs = require('fs');
@@ -31,7 +31,7 @@ function mouth(edits = {}) {
 }
 const PIGI = { '16B': { pi: 1, gi: 0 }, '11La': { pi: 1, gi: 0 }, '26B': { pi: 1, gi: 1 }, '46Li': { pi: 2, gi: 1 }, '31La': { pi: 0, gi: 0 }, '36Li': { pi: 1, gi: 1 } };
 const RISK_HIGH = { r1: 'n', r2: 'y', r3: 'y', r4: 'n', r5: 'y', r6: 'n', r7: 'y', r8: 'y' };   // 7 → very high
-const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on: '2026-10-28', assent: true, uc_verified: true, uc_checked_on: '2026-10-29', uc_method: 'ตรวจสิทธิออนไลน์' };
+const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on: '2026-10-28', assent: true, coverage: 'uc', uc_checked_on: '2026-10-29', uc_method: 'ตรวจสิทธิออนไลน์' };
 
 (async () => {
   console.log('anon key only');
@@ -58,6 +58,14 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   ok(!!id1.error, 'names cannot be stored (D-64)');
   const dob = await B.from('children').update({ dob: '2019-06-12' }).eq('study_id', kid1).select();
   ok(!!dob.error, 'full date of birth cannot be stored (birth month only)');
+  const cv = await B.from('children').select('coverage,uc_verified').eq('study_id', kid1).single();
+  ok(cv.data && cv.data.coverage === 'uc' && cv.data.uc_verified === true, 'coverage UC saved, UC tick kept in step', JSON.stringify(cv.data));
+  const eN = await B.rpc('enrol_child', { p_child: { school_id: 'B-01', ...consented, coverage: 'none' } });
+  const kidN = eN.data;
+  const cn = eN.error ? null : (await B.from('children').select('coverage,uc_verified').eq('study_id', kidN).single()).data;
+  ok(cn && cn.coverage === 'none' && cn.uc_verified === false, 'no public coverage (e.g. foreign child) saved', eN.error ? eN.error.message : JSON.stringify(cn));
+  const eBad = await B.rpc('enrol_child', { p_child: { school_id: 'B-01', class: 'ป.1/1', coverage: 'private' } });
+  ok(!!eBad.error, 'unknown coverage value is refused');
   const wrongSchool = await B.rpc('enrol_child', { p_child: { school_id: 'C-01', class: 'ป.1/1' } });
   ok(!!wrongSchool.error, "cannot enrol into another unit's school");
 
@@ -80,8 +88,14 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const pr = await B.from('v_services_priced').select('code,unit_price,primary_tooth').in('id', [s1.data.id, s2.data.id]);
   const p171 = pr.data.find(r => r.code === '171'), p55 = pr.data.find(r => r.code === '55');
   ok(+p171.unit_price === 242.22 && +p55.unit_price === 0 && p55.primary_tooth, 'priced view: sealant 242.22, primary-tooth filling 0 (D-54)');
+  const sN = await B.from('services').insert({ unit_id: 'public-cap', study_id: kidN, code: '170', service_date: '2026-10-31', status: 'recorded' }).select().single();
+  const pc = await B.from('v_services_priced').select('id,coverage,nhso_first').in('id', [s1.data.id, sN.data && sN.data.id].filter(Boolean));
+  const pc1 = pc.data && pc.data.find(r => r.id === s1.data.id), pcN = pc.data && sN.data && pc.data.find(r => r.id === sN.data.id);
+  ok(pc1 && pc1.coverage === 'uc' && pc1.nhso_first === true && pcN && pcN.coverage === 'none' && pcN.nhso_first === false,
+    'priced view: UC claims NHSO first, no public coverage paid in full by the project (D-68)', sN.error ? sN.error.message : JSON.stringify(pc.data));
   const ex = await B.from('v_export_children').select('*').eq('study_id', kid1).single();
   ok(ex.data && ex.data.age_months >= 87 && ex.data.age_months <= 89 && !('dob' in ex.data), 'export: age in months from birth month, no birth date', ex.data && ex.data.age_months);
+  ok(ex.data && ex.data.coverage === 'uc', 'export carries coverage');
 
   console.log('unit public-ffs (C, shared savings): claims cycle');
   const C = await login('public-ffs');
@@ -120,6 +134,6 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const re = await C.from('services').update({ status: 'submitted' }).eq('id', ids[1]).select();
   ok(!re.error && re.data.length === 1, 'unit resubmits the returned claim');
 
-  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kc.data}`);
+  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });

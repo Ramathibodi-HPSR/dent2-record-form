@@ -25,7 +25,7 @@ const el = (tag, attrs = {}, ...kids) => {
   for (const c of kids) if (c != null && c !== false) e.append(c);
   return e;
 };
-// Elements added in v1.0.1 may be missing from a cached old index.html: set them softly (R2-01).
+// Elements added in v1.0.1 and later may be missing from a cached old index.html: set them softly (R2-01).
 const setIf = (sel, key, v) => { const e = $(sel); if (e) e[key] = v; };
 // replaceChildren() prints null and false as text ("null"); this skips them, like el() does (R1-01).
 const fill = (node, ...kids) => node.replaceChildren(...kids.filter(c => c != null && c !== false));
@@ -313,6 +313,14 @@ function kidFrom(c, ex) {
   return k;
 }
 const sexTh = k => (k.c.sex === 'F' ? 'หญิง' : k.c.sex === 'M' ? 'ชาย' : '');
+// Health coverage (D-68): another public scheme is claimed like UC; with no public coverage (e.g. a foreign
+// child) the unit does not claim NHSO and the project pays its full rate.
+const COV = {
+  uc: { th: 'UC (บัตรทอง)', ex: '', rule: 'เบิก สปสช. ตามปกติ และเบิกโครงการตามอัตราค่าบริการของหน่วย' },
+  other: { th: 'สิทธิรัฐอื่น', ex: ' เช่น ข้าราชการ ประกันสังคม รัฐวิสาหกิจ อปท.', rule: 'เบิกเหมือนเด็กสิทธิ UC' },
+  none: { th: 'ไม่มีสิทธิรัฐ', ex: ' เช่น เด็กต่างด้าวที่ไม่มีหลักประกันสุขภาพภาครัฐ', rule: 'ไม่ต้องเบิก สปสช. โครงการจ่ายเต็มอัตราตามอัตราค่าบริการของหน่วย' },
+};
+const covText = c => (COV[c.coverage] ? `${COV[c.coverage].th} · ${COV[c.coverage].rule}` : 'ยังไม่ตรวจสิทธิ');
 const kidLabel = k => [k.cls, sexTh(k)].filter(Boolean).join(' · ');
 function reindex(u) {
   u.txByKid = {};
@@ -624,6 +632,7 @@ function kidCard(u, k, st) {
   m.firstChild.style.width = prog + '%';
   const chips = el('span', { class: 'kc-chips' },
     !hasConsent(k) ? el('span', { class: 'chip chip--stop', text: 'ยังไม่มีความยินยอม' }) : null,
+    k.c.coverage === 'none' ? el('span', { class: 'chip chip--plain', text: 'ไม่มีสิทธิรัฐ' }) : null,
     ...st.miss.slice(0, 4).map(x => el('span', { class: 'chip chip--warn', text: x.t })),
     ...st.due.slice(0, 3).map(x => el('span', { class: 'chip chip--due', text: x.t })),
     st.refWait ? el('span', { class: 'chip chip--stop', text: 'ส่งต่อ รอผล' }) : null,
@@ -694,7 +703,7 @@ const lastClass = u => { try { return JSON.parse(lsGet('dent2-class-' + u.id) ||
 function clearChildFields(c = {}) {
   $('#enSex').value = c.sex || '';
   $('#enBym').value = c.birth_ym || '';
-  $('#enUc').checked = !!c.uc_verified; $('#enUcDate').value = c.uc_checked_on || ''; $('#enUcMethod').value = c.uc_method || '';
+  setIf('#enCov', 'value', c.coverage || ''); $('#enUcDate').value = c.uc_checked_on || ''; $('#enUcMethod').value = c.uc_method || ''; covHint();
   $('#enConsent').value = c.consent_on || ''; $('#enAssent').checked = !!c.assent;
   $('#enCond').value = c.conditions || ''; $('#enAgSilver').checked = !!c.allergy_silver; $('#enAgColo').checked = !!c.allergy_colophony;
   beAll($('#enForm'));
@@ -719,6 +728,11 @@ function renderEnrol() {
   clearChildFields(c);
 }
 $('#enSchool').addEventListener('change', e => fillClasses(unit(), e.target.value));
+function covHint() {
+  const v = $('#enCov') ? $('#enCov').value : '';
+  setIf('#enCovHint', 'textContent', v ? `${COV[v].th}${COV[v].ex}: ${COV[v].rule}` : 'ยังไม่ตรวจสิทธิ: ลงทะเบียนและตรวจได้ เลือกสิทธิภายหลังได้ที่ "แก้ไขข้อมูลลงทะเบียน"');
+}
+$('#enCov')?.addEventListener('change', covHint);
 let enNext = false;   // which submit button was used (also for browsers without SubmitEvent.submitter)
 $('#enSaveNext')?.addEventListener('click', () => { enNext = true; });
 $('#enSave').addEventListener('click', () => { enNext = false; });
@@ -736,12 +750,13 @@ $('#enForm').addEventListener('submit', async e => {
   if (bym && +bym.slice(0, 4) > 2400) return bad('เดือนปีเกิด: ช่องนี้ใช้ปี ค.ศ. (พ.ศ. ลบ 543) เช่น 2019-05');
   if (bym && !/^\d{4}-(0[1-9]|1[0-2])$/.test(bym)) return bad('เดือนปีเกิด: ใส่ปี ค.ศ.-เดือน เช่น 2019-05');
   if (bym && bym > toInput(TODAY).slice(0, 7)) return bad('เดือนปีเกิดอยู่ในอนาคต');
+  if ($('#enCov') && !$('#enCov').value && ($('#enUcDate').value || $('#enUcMethod').value)) return bad('เลือกสิทธิการรักษา (ใส่วันที่หรือวิธีตรวจสิทธิไว้แล้ว)');
   for (const [id, lab] of [['#enUcDate', 'วันที่ตรวจสิทธิ'], ['#enConsent', 'วันที่ลงนามยินยอม']]) {
     const p = dateProblem($(id).value, lab); if (p) return bad(p);
   }
   const child = {
     school_id: $('#enSchool').value, class: $('#enClass').value, sex: $('#enSex').value, birth_ym: bym || null,
-    consent_on: $('#enConsent').value || null, assent: $('#enAssent').checked, uc_verified: $('#enUc').checked,
+    consent_on: $('#enConsent').value || null, assent: $('#enAssent').checked, coverage: $('#enCov') ? $('#enCov').value || null : undefined,
     uc_checked_on: $('#enUcDate').value || null, uc_method: $('#enUcMethod').value || null, conditions: $('#enCond').value.trim() || null,
     allergy_silver: $('#enAgSilver').checked, allergy_colophony: $('#enAgColo').checked,
   };
@@ -837,7 +852,7 @@ function renderFileHead() {
     el('details', {}, el('summary', { text: 'ข้อมูลลงทะเบียน' }),
       el('div', { class: 'childbar', style: 'margin-top:10px' },
         kv('เดือนปีเกิด', k.birth ? thMon(k.birth) : '–'),
-        kv('สิทธิ UC', k.c.uc_verified ? `ยืนยันแล้ว${k.c.uc_method ? ' (' + k.c.uc_method + ')' : ''}${k.c.uc_checked_on ? ' ' + thShort(fromInput(k.c.uc_checked_on)) : ''}` : 'ยังไม่ยืนยัน'),
+        kv('สิทธิการรักษา', `${covText(k.c)}${k.c.coverage && k.c.uc_method ? ' (' + k.c.uc_method + ')' : ''}${k.c.coverage && k.c.uc_checked_on ? ' ' + thShort(fromInput(k.c.uc_checked_on)) : ''}`),
         kv('ความยินยอม', `${k.c.consent_on ? 'ผู้ปกครองลงนาม ' + thShort(fromInput(k.c.consent_on)) : 'ผู้ปกครองยังไม่ลงนาม'} · ${k.c.assent ? 'เด็กยินยอม' : 'เด็กยังไม่ยินยอม'}`),
         kv('โรคประจำตัว · การแพ้', `${k.c.conditions || 'ไม่มี'} · ${[k.c.allergy_silver ? 'แพ้เงิน (ห้าม SDF)' : '', k.c.allergy_colophony ? 'แพ้โคโลโฟนี' : ''].filter(Boolean).join(', ') || 'ไม่มี'}`)),
       el('div', { class: 'row', style: 'margin-top:10px' }, el('button', { class: 'btn', type: 'button', text: 'แก้ไขข้อมูลลงทะเบียน', onclick: () => { if (dirtyGuard()) { S.editId = k.id; show('enrol'); } } }))));
@@ -1361,6 +1376,9 @@ function txFlags(u) {
     if (isPrimNo(tx.tooth)) notes.push('ฟันน้ำนม ไม่นับในงบโครงการ');
     if (PRICE[tx.code] && PRICE[tx.code].outside && !isPrimNo(tx.tooth)) notes.push('นอกงบโครงการ เบิกตามระบบปกติ');
     if (PRICE[tx.code] && PRICE[tx.code].unpriced) notes.push('ยังไม่มีราคา (นับจำนวนไว้)');
+    const kc = tx.kid && u.byId[tx.kid] ? u.byId[tx.kid].c : null;
+    if (kc && kc.coverage === 'none') notes.push('ไม่มีสิทธิรัฐ: ไม่เบิก สปสช. โครงการจ่ายเต็มอัตรา');
+    if (kc && !kc.coverage) notes.push('ยังไม่ระบุสิทธิการรักษา');
     if (tx.kid && tx.code === '170') {
       if (u.arm === 'control' ? bump(`170|${tx.kid}|${tx.date.getFullYear()}`) > 1 : bump(`170|${tx.kid}|${tx.date.getFullYear()}-${tx.date.getMonth()}`) > 1)
         notes.push(u.arm === 'control' ? 'ฟลูออไรด์เกินปีละ 1 ครั้ง (เงื่อนไข สปสช. รอยืนยัน)' : 'ฟลูออไรด์เกินเดือนละ 1 ครั้ง');
@@ -1431,6 +1449,7 @@ function claimPreview() {
   const pf = planFor(k, { code, tooth, date: d });
   const v = refValue(u, code, tooth);
   pv.append(line('นักเรียน', `${k.id} · ${kidLabel(k)} · เดือนที่ ${monthOf(k.base, d)} หลังตรวจครั้งแรก`),
+    line('สิทธิ', k.c.coverage ? covText(k.c) : 'ยังไม่ตรวจสิทธิ · เลือกได้ที่ "แก้ไขข้อมูลลงทะเบียน" ในแฟ้มนักเรียน'),
     line('แผน', !pf ? 'นอกแผน · บันทึกได้ ติดป้าย "นอกแผน"'
       : pf.late ? `ตามแผน (เลยกำหนด) เดือนที่ ${pf.month}: ${rowName(pf.row)} · ติ๊กช่องเดือนที่ ${pf.month} ให้`
         : `ตรงกับแผน: ${rowName(pf.row)}${pf.month ? ` เดือนที่ ${pf.month}` : ''} · ติ๊กในแผนให้`),

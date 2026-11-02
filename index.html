@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=1.0.1">
-<link rel="stylesheet" href="app.css?v=1.0.1">
+<link rel="stylesheet" href="style.css?v=1.0.2">
+<link rel="stylesheet" href="app.css?v=1.0.2">
 </head>
 <body>
 <header class="topbar">
@@ -96,12 +96,13 @@
       <div class="card stack">
         <h3>สิทธิและความยินยอม</h3>
         <div class="g2f">
-          <label class="chk"><input type="checkbox" id="enUc"> ตรวจสิทธิแล้ว เป็นสิทธิ UC</label>
+          <label class="field">สิทธิการรักษา<select id="enCov"><option value="">– ยังไม่ตรวจสิทธิ –</option><option value="uc">UC (บัตรทอง)</option><option value="other">สิทธิรัฐอื่น</option><option value="none">ไม่มีสิทธิรัฐ</option></select></label>
           <label class="field">วันที่ตรวจสิทธิ<input id="enUcDate" type="date"></label>
           <label class="field">วิธีตรวจสิทธิ<select id="enUcMethod"><option value="">–</option><option>ตรวจสิทธิออนไลน์</option><option>บัตรประชาชน / สูติบัตร</option><option>อื่น ๆ</option></select></label>
           <label class="field">วันที่ผู้ปกครองลงนามยินยอม<input id="enConsent" type="date"></label>
           <label class="chk"><input type="checkbox" id="enAssent"> เด็กยินยอม (assent)</label>
         </div>
+        <p class="note" id="enCovHint" aria-live="polite"></p>
         <p class="small muted">ยังไม่มีความยินยอมของผู้ปกครองและเด็ก ระบบไม่ให้บันทึกผลตรวจ</p>
       </div>
       <div class="card stack">
@@ -333,7 +334,7 @@
 <div class="tip-float" id="ftip" role="tooltip" hidden></div>
 
 <script src="vendor/supabase.js"></script>
-<script src="config.js?v=1.0.1"></script>
-<script src="app.js?v=1.0.1"></script>
+<script src="config.js?v=1.0.2"></script>
+<script src="app.js?v=1.0.2"></script>
 </body>
 </html>

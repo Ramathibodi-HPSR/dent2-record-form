@@ -78,8 +78,15 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   d.querySelector('#enBym').value = '2019-03';
   d.querySelector('#enConsent').value = '2026-10-30';
   d.querySelector('#enAssent').checked = true;
+  ok(/ยังไม่ตรวจสิทธิ/.test(d.querySelector('#enCovHint').textContent), 'coverage starts as "not checked" (D-68)', d.querySelector('#enCovHint').textContent);
+  d.querySelector('#enUcDate').value = '2026-10-30';
+  d.querySelector('#enForm').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+  ok(await until(() => /เลือกสิทธิการรักษา/.test(d.querySelector('#enMsg').textContent)), 'a rights-check date needs a coverage choice', d.querySelector('#enMsg').textContent);
+  set(w, d.querySelector('#enCov'), 'none');
+  ok(/ไม่ต้องเบิก สปสช\. โครงการจ่ายเต็มอัตรา/.test(d.querySelector('#enCovHint').textContent), 'no public coverage: hint says the project pays the full rate', d.querySelector('#enCovHint').textContent);
   d.querySelector('#enForm').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
   ok(await until(() => !d.querySelector('#file').hidden && /TB-\d{3}/.test(d.querySelector('#fileHead').textContent)), 'enrolment saved; child file opens', d.querySelector('#enMsg').textContent);
+  ok(/สิทธิการรักษา\s*ไม่มีสิทธิรัฐ/.test(d.querySelector('#fileHead').textContent), 'child file shows the coverage', d.querySelector('#fileHead').textContent.slice(0, 400));
   const newId = (d.querySelector('#fileHead').textContent.match(/TB-\d{3}/) || [])[0];
   ok(/เขียนรหัสนี้ไว้ข้างชื่อเด็ก/.test(d.querySelector('#fileHead').textContent), 'new study ID shown with "write it on your name list"');
   ok(noNull(d), 'no "null" text on the child file (R1-01)');
@@ -218,6 +225,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   set(w, d.querySelector('#cKid'), newId);
   set(w, d.querySelector('#cCode'), '170');
   ok(/นอกแผน|ตรงกับแผน/.test(d.querySelector('#cPreview').textContent), 'preview says in or out of plan');
+  ok(/สิทธิ\s*ไม่มีสิทธิรัฐ/.test(d.querySelector('#cPreview').textContent), 'preview shows the coverage (D-68)', d.querySelector('#cPreview').textContent);
   d.querySelector('#fOne').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
   ok(await until(() => /บันทึกแล้ว/.test(d.querySelector('#toast').textContent)), 'individual service saved', d.querySelector('#toast').textContent);
   set(w, d.querySelector('#gCode'), '177');
@@ -234,6 +242,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   d.querySelector('#fGroup').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
   ok(await until(() => /บันทึกกิจกรรมแล้ว/.test(d.querySelector('#toast').textContent)), 'group activity saved', d.querySelector('#toast').textContent);
   ok(/กิจกรรมกลุ่ม/.test(d.querySelector('#ledgerBody').textContent), 'ledger shows the group row');
+  ok(/ไม่มีสิทธิรัฐ: ไม่เบิก สปสช\./.test(d.querySelector('#ledgerBody').textContent), 'ledger notes the child with no public coverage');
   ok(errors.length === 0, 'no script errors (unit)', errors.join(' | '));
 
   console.log('unit public-ffs: submit');
