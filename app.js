@@ -657,7 +657,7 @@ function moneySection(u) {
   } else if (u.arm === 'ffs') {
     tiles.push(tile('เพดานงบประมาณรวม', `${fmt(b.ceil)} บาท`, `คำนวณจากผลตรวจครั้งแรก ${b.n} คน`),
       tile('เบิกแล้ว', `${fmt(c.claimed)} บาท`, `อนุมัติแล้ว ${fmt(c.approved + c.paid)} บาท · ร่างยังไม่ส่ง ${fmt(c.draft)} บาท`),
-      b.ceil - c.claimed >= 0 ? tile('เหลือในเพดาน', `${fmt(b.ceil - c.claimed)} บาท`, b.ceil > 0 ? `ใช้ไป ${Math.round(c.claimed / b.ceil * 100)}%` : '')
+      b.ceil - c.claimed >= 0 ? tile('เหลือในเพดาน', `${fmt(b.ceil - c.claimed)} บาท`, b.ceil > 0 ? `ใช้ไป ${Math.round(c.claimed / b.ceil * 100)}% · ถ้าจบปีที่ยอดนี้และผ่านตัวชี้วัดครบ 4 ตัว ได้ส่วนแบ่ง 30% = ${fmt((b.ceil - c.claimed) * 0.3)} บาท (02 ข้อ 2)` : '')
         : tile('เกินเพดาน', `${fmt(c.claimed - b.ceil)} บาท`, 'ยอดเบิกรวมทั้งปีต้องไม่เกินเพดาน (02 ข้อ 2)'));
   } else {
     tiles.push(tile('เบิกแล้ว', `${fmt(c.claimed)} บาท`, `อนุมัติแล้ว ${fmt(c.approved + c.paid)} บาท`), tile('ร่างยังไม่ส่ง', `${fmt(c.draft)} บาท`));
@@ -1547,7 +1547,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.2.1', '_blank');
+  const w = window.open('booklet.html?v=1.2.2', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -1890,8 +1890,8 @@ function renderClaims() {
   $('#clTitle').textContent = claimTab(u);
   $('#clSub').textContent = u.arm === 'cap'
     ? 'บันทึกทุกบริการเป็นผลงาน ใช้ติดตามแผนและวัดต้นทุน ไม่มีขั้นเบิกเงินรายรายการ เพราะหน่วยได้รับค่าเหมาจ่าย'
-    : u.arm === 'ffs' ? 'บันทึกบริการแล้วส่งเบิกเดือนละครั้ง ยอดเบิกทั้งหมดนับในเพดานงบรวมของหน่วย'
-      : 'บันทึกบริการแล้วส่งเบิกที่ทีมวิจัยเดือนละครั้ง เฉพาะรายการที่โครงการจ่าย รายการอื่นบันทึกเป็นผลงาน';
+    : u.arm === 'ffs' ? 'บันทึกบริการแล้วส่งเบิกเดือนละครั้ง ภายในวันที่ 20 ของทุกเดือน ทีมวิจัยตรวจแล้วโอนภายในวันที่ 27 (02 ข้อ 6) ยอดเบิกทั้งหมดนับในเพดานงบรวมของหน่วย'
+      : 'บันทึกบริการแล้วส่งเบิกที่ทีมวิจัยเดือนละครั้ง ภายในวันที่ 20 ของทุกเดือน ทีมวิจัยตรวจแล้วโอนภายในวันที่ 27 (03 ข้อ 5) เฉพาะรายการที่โครงการจ่าย รายการอื่นบันทึกเป็นผลงาน';
   const cnt = st => u.tx.filter(t => t.status === st);
   const sum = list => list.reduce((a, t) => a + txAmt(u, t), 0);
   setIf('#lAmtHead', 'textContent', amtLabel(u));
