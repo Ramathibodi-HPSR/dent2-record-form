@@ -66,7 +66,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(d.querySelector('#provSel').value === '' && d.querySelector('#provSel').classList.contains('is-missing'), '"ผู้บันทึก" starts empty and marked (R1-02)');
   ok(d.querySelectorAll('#home .tile--link').length >= 3, 'home tiles open the student list (R1-19)');
   ok(/ค่าเหมาจ่ายรายหัวทั้งปี/.test(d.querySelector('#home').textContent) && /งวดแรก 70%/.test(d.querySelector('#home').textContent), 'home shows the capitation and its 70% first instalment (v1.1)');
-  ok(/รายการโอนเงิน/.test(d.querySelector('#home').textContent) && /ค่าตอบแทนเก็บข้อมูลรอบ 1/.test(d.querySelector('#home').textContent), 'home lists transfers and the data-collection fee');
+  ok(/รายการโอนเงิน/.test(d.querySelector('#home').textContent) && /ค่าตอบแทนเก็บข้อมูล/.test(d.querySelector('#home').textContent) && /รอบแรก \d+ คน/.test(d.querySelector('#home').textContent), 'home lists transfers and the data-collection fee');
   ok(!!d.querySelector('#cohortBtn'), 'home offers "ส่ง cohort" while the cohort is open');
   if (d.querySelector('#setupCard')) {
     click(w, d.querySelector('#vanYes'));
@@ -371,6 +371,8 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
     ok(F.d.querySelector('#pigiSkip').checked, 'PI/GI start as last time (skipped at the first exam) (D-78)');
     click(F.w, F.d.querySelector('#archL .pno[aria-label^="ฟันแท้ 46"]'));
     ok(F.d.querySelector('#archL .pno[aria-label^="ฟันแท้ 46"]').getAttribute('aria-pressed') === 'true', '46 marked erupted at the recall');
+    click(F.w, F.d.querySelector('#archU .pno[aria-label^="ฟันน้ำนม 55"]'));
+    ok(F.d.querySelector('#archU .pno[aria-label^="ฟันน้ำนม 55"]').getAttribute('aria-pressed') === 'false', '55 marked gone at the recall');
     F.d.querySelector('#saveExamBtn').click();
     ok(await until(() => /ยังไม่ได้ระบุสภาพสารเคลือบ ซี่ 16, 26/.test(toastText(F.d))) && F.d.querySelectorAll('#sealRet .is-missing').length === 2, 'save blocked until each sealant is stated', toastText(F.d));
     click(F.w, [...F.d.querySelectorAll('#sealRet .seg[aria-label="สารเคลือบซี่ 16"] button')].find(b => b.textContent === 'หลุด'));
@@ -404,6 +406,14 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
     set(F.w, await until(() => F.d.querySelector('#cKid')), fid);
     set(F.w, F.d.querySelector('#cCode'), '171');
     ok([...F.d.querySelectorAll('#cTooth option')].some(o => o.value === '46'), 'claims: sealant can be recorded on 46', [...F.d.querySelectorAll('#cTooth option')].map(o => o.value).join());
+    // the tooth list follows the service date: 55, gone at today's recall, is still offered for a service 20 days ago and on the
+    // recall day itself (v1.3.1, R2-04, R3-07; the day after is checked without the network below)
+    set(F.w, F.d.querySelector('#cCode'), '1');
+    const has55 = () => [...F.d.querySelectorAll('#cTooth option')].some(o => o.value === '55');
+    const today55 = has55();
+    set(F.w, F.d.querySelector('#cDate'), daysAgo(20));
+    ok(today55 && has55(), 'claims: 55, found gone at today\'s recall, is offered for a service on the recall day and 20 days before', `today ${today55}, 20 days ago ${has55()}`);
+    set(F.w, F.d.querySelector('#cDate'), daysAgo(0));
     // a saved recall turned into the 6-month round: its 174 goes (R1 F-08)
     click(F.w, F.d.querySelector('#t-file'));
     click(F.w, F.d.querySelector('#ft-exam'));
@@ -414,6 +424,11 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
     ok(await until(() => /ลบบริการตรวจ \(174\)/.test(toastText(F.d))), 'recall changed to the 6-month round: its 174 is removed', toastText(F.d));
     const left174 = (await api.from('services').select('id').eq('study_id', fid).eq('code', '174').eq('service_date', daysAgo(0))).data || [];
     ok(left174.length === 0, 'no 174 left on the exam date', JSON.stringify(left174));
+    click(F.w, F.d.querySelector('#t-home'));
+    ok(await until(() => /ค่าตอบแทนเก็บข้อมูล/.test(F.d.querySelector('#home').textContent) && /รอบ 6 เดือน \d+ คน/.test(F.d.querySelector('#home').textContent)),
+      'home counts the data fee of the 6-month round too (D-30, v1.3.1)', (F.d.querySelector('#home').textContent.match(/ค่าตอบแทนเก็บข้อมูล.{0,80}/) || [''])[0]);
+    click(F.w, F.d.querySelector('#t-file'));
+    click(F.w, F.d.querySelector('#ft-exam'));
     // a 12-month round asks for "ตรวจครบทุกซี่แล้ว" under the chart before it saves (R1 F-05, R2-08)
     click(F.w, await until(() => byText(F.d, '#examStart button', /\+ ตรวจรอบโครงการ 12 เดือน/)));
     const okBox = F.d.querySelector('#chartOkBox');
@@ -444,7 +459,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   console.log('warnings by NHSO fiscal year and the reseal rule (D-77)');
   // Pure check of txFlags on made-up services in a page whose app.js also hands txFlags out; the server pays by the
   // same rules (scripts/test-rls.cjs).
-  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags };\n})();\n'));
+  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags, fuRows, rowTx, kidFrom, bookletData, teethAt, S };\n})();\n'));
   const fl = H.w.eval(`(() => {
     const tx = (id, code, date, tooth) => { const [y, m, d] = date.split('-').map(Number); return { id, kid: 'X', code, tooth: tooth || null, date: new Date(y, m - 1, d) }; };
     const run = (arm, list, exams = []) => { const f = __t.txFlags({ arm, byId: {}, exams, tx: list }); return list.map(t => f.get(t.id).join(' ')); };
@@ -461,6 +476,56 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(!fl.kit[0] && /175/.test(fl.kit[1]) && !fl.kit[2], 'brushing kit: Dec and Jan are one fiscal year (flagged), 1 Oct starts a new one', JSON.stringify(fl.kit));
   ok(/หลุด/.test(fl.seal[1]) && !fl.sealLoss[1], 'reseal of 16 flagged unless an exam in between records the sealant lost', JSON.stringify([fl.seal, fl.sealLoss]));
   ok(/ปีงบละ 1 ครั้ง/.test(fl.sealCtl[1]), 'control: the same tooth sealed twice in one fiscal year is flagged even after a loss', JSON.stringify(fl.sealCtl));
+  // Follow-up rows across exams and the parent booklet, on made-up data (v1.3.1, review R2-05).
+  const fx = H.w.eval(`(() => {
+    const D = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+    const POS = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36], EARLY = [16, 26, 36, 46, 11, 21, 31, 32, 41, 42];
+    const mouth = (e = {}) => { const m = {}; for (const p of POS) m[p] = EARLY.includes(p) ? { t: 'p', A: 0, B: 0, act: null, need: 0 } : { t: 'd', A: 0, B: 0, act: null, need: 0 }; for (const [p, v] of Object.entries(e)) Object.assign(m[p], v); return m; };
+    const risk = { r1: 'n', r2: 'y', r3: 'y', r4: 'n', r5: 'y', r6: 'n', r7: 'y', r8: 'y' };
+    const ex = (id, round, date, teeth) => ({ id, study_id: 'X', unit_id: 'U', round, exam_date: date, attended: true, created_at: date + 'T00:00:00Z', teeth, risk, pigi: {}, urgent: {}, need_override: {}, override_reason: {}, place: 'van', examiner_code: 'E1' });
+    const base = ex('b', 'baseline', '2026-11-03', mouth({ 16: { A: 0, need: 2 } }));
+    const exams = [base, ex('r', 'recall', '2027-02-03', mouth({ 16: { A: 7, lost: 's', need: 2 } })), ex('m', 'm6', '2027-05-03', mouth({ 16: { A: 7, lost: 's', need: 2 } }))];
+    const tx = (id, date) => ({ id, kid: 'X', code: '171', tooth: 16, date: D(date), planKey: 'seal-16', status: 'draft' });
+    const u = { id: 'U', arm: 'ffs', ptype: 'public', name: 'หน่วย X', schools: [], exams, txByKid: { X: [tx(1, '2026-11-13'), tx(2, '2027-02-03')] } };
+    const k = __t.kidFrom({ study_id: 'X', unit_id: 'U', school_id: 's', class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', coverage: 'uc' }, base);
+    const rows = __t.fuRows(u, k).filter(r => r.tooth === 16);
+    const b = __t.bookletData(u, k);
+    return { n: rows.length, first: rows[0] && __t.rowTx(u, k, rows[0]).length, firstTo: !!(rows[0] && rows[0].to), second: rows[1] && __t.rowTx(u, k, rows[1]).length,
+      seal: __t.rowTx(u, k, { codes: ['171'], tooth: 16 }).length, bDate: b.exam.date, bFind: b.exam.findings_date, b16: (b.exam.teeth.find(t => t.pos === 16) || {}).A };
+  })()`);
+  ok(fx.n === 2 && fx.first === 1 && fx.firstTo && fx.second === 0, 'a done re-seal stays in the plan when a later exam opens a new one on the tooth (R2-05)', JSON.stringify(fx));
+  ok(fx.seal === 1, 'a re-seal keyed to the first-exam row before the follow-up was saved counts only on the re-seal row (R2-05)', JSON.stringify(fx));
+  ok(fx.bDate === '2026-11-03' && fx.bFind === '2027-05-03' && fx.b16 === 7, 'the parent booklet shows the latest exam; its plan months stay on the first exam (v1.3.1)', JSON.stringify(fx));
+  // Review R3: a loss that lasts over two exams, a partial sealant at the first exam, a lost filling (7r), the exam day.
+  const r3 = H.w.eval(`(() => {
+    const D = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+    const POS = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36], EARLY = [16, 26, 36, 46, 11, 21, 31, 32, 41, 42];
+    const mouth = (e = {}) => { const m = {}; for (const p of POS) m[p] = EARLY.includes(p) ? { t: 'p', A: 0, B: 0, act: null, need: 0 } : { t: 'd', A: 0, B: 0, act: null, need: 0 }; for (const [p, v] of Object.entries(e)) Object.assign(m[p], v); return m; };
+    const risk = { r1: 'n', r2: 'y', r3: 'y', r4: 'n', r5: 'y', r6: 'n', r7: 'y', r8: 'y' };
+    const run = (id, base16, exams, sealDates) => {
+      const ex = (eid, round, date, teeth) => ({ id: eid, study_id: id, unit_id: 'U', round, exam_date: date, attended: true, created_at: date + 'T00:00:00Z', teeth, risk, pigi: {}, urgent: {}, need_override: {}, override_reason: {}, place: 'van', examiner_code: 'E1' });
+      const base = ex(id + 'b', 'baseline', '2026-11-03', mouth({ 16: base16 }));
+      const all = [base, ...exams.map(([r, d, t16, extra], i) => ex(id + i, r, d, mouth({ 16: t16, ...(extra || {}) })))];
+      const txs = sealDates.map((d, i) => ({ id: i + 1, kid: id, code: '171', tooth: 16, date: D(d), planKey: 'seal-16', status: 'draft' }));
+      const u = { id: 'U', arm: 'ffs', ptype: 'public', name: 'หน่วย X', schools: [], exams: all, txByKid: { [id]: txs } };
+      const k = __t.kidFrom({ study_id: id, unit_id: 'U', school_id: 's', class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', coverage: 'uc' }, base);
+      const rows = __t.fuRows(u, k).filter(r => r.tooth === 16);
+      return { rows: rows.map(r => [r.reseal ? 'reseal' : 'seal', !!r.to, __t.rowTx(u, k, r).length]), first: __t.rowTx(u, k, { codes: ['171'], tooth: 16 }).length, u, k };
+    };
+    const lostS = { A: 7, lost: 's', need: 2 };
+    const a = run('A', { A: 0, need: 2 }, [['recall', '2027-02-03', lostS], ['m6', '2027-05-03', lostS]], ['2026-11-13', '2027-05-03']);
+    const b = run('B', { A: 1, need: 2 }, [['recall', '2027-02-03', { A: 1, need: 2 }]], ['2027-03-01']);
+    const c = run('C', { A: 0, need: 2 }, [['recall', '2027-02-03', { A: 7, lost: 'r', need: 2 }]], ['2026-11-13']);
+    const d = run('E', { A: 0, need: 2 }, [['recall', '2027-02-03', { A: 2 }, { 15: { t: 'n', A: 99, B: null, act: null, need: null } }]], ['2026-11-13']);
+    __t.S.units = { U: d.u };   // teethAt reads the unit from the app state
+    const t = __t.teethAt(d.k, D('2027-02-03')), t2 = __t.teethAt(d.k, D('2027-02-04'));
+    __t.S.units = {};
+    return { a: a.rows, aFirst: a.first, b: b.rows, bFirst: b.first, c: c.rows, day: t[15] && t[15].t, after: t2[15] && t2[15].t };
+  })()`);
+  ok(r3.a.length === 1 && !r3.a[0][1] && r3.a[0][2] === 1 && r3.aFirst === 1, 'R3-01: a loss recorded at two exams in a row keeps one re-seal row, done by the re-seal after the second', JSON.stringify(r3));
+  ok(r3.b.length === 0 && r3.bFirst === 1, 'R3-02: a partial sealant at the first exam stays on the first-exam row; no second re-seal row', JSON.stringify(r3));
+  ok(r3.c.length === 0, 'R3-08: a lost filling (7r) on a sealed tooth opens no re-seal (D-77, D-78)', JSON.stringify(r3));
+  ok(r3.day === 'd' && r3.after === 'n', 'R3-07: on the exam day a tooth that exam found gone is still offered; the day after it is not', JSON.stringify(r3));
 
   console.log(`\n${pass} passed, ${fail} failed · enrolled ${newId}`);
   process.exit(fail ? 1 : 0);

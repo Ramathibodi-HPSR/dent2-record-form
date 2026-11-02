@@ -179,6 +179,14 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const lostX = await C.from('exams').insert({ ...m6, round: 'recall', teeth: mouth({ 16: { A: 7, lost: 's' }, 26: { A: 7, lost: 'r' } }) }).select('id').single();
   const lostS = lostX.data ? (await C.from('v_exam_summary').select('"F"').eq('exam_id', lostX.data.id).single()).data : null;
   ok(!lostX.error && lostS && lostS.F === 1, 'D-78: Code A 7 with 7s (sealant lost) is not a filling in DMFT; 7r is', lostX.error ? lostX.error.message : JSON.stringify(lostS));
+  const kc3 = (await C.rpc('enrol_child', { p_child: { school_id: 'C-01', ...consented } })).data;
+  await C.from('services').insert(svc('public-ffs', kc3, '171', '2026-11-01', { tooth: 16 }));
+  const x7 = await C.from('exams').insert({ ...m6, study_id: kc3, round: 'recall', teeth: mouth({ 16: { A: 7, lost: 'r' } }) }).select('id').single();
+  const s7 = await C.from('services').insert(svc('public-ffs', kc3, '171', '2026-11-02', { tooth: 16 })).select('id').single();
+  const n7r = s7.data ? (await notes(C, [s7.data.id]))[s7.data.id] : '';
+  if (x7.data) await C.from('exams').update({ teeth: mouth({ 16: { A: 7, lost: 's' } }) }).eq('id', x7.data.id);
+  const n7s = s7.data ? (await notes(C, [s7.data.id]))[s7.data.id] : '';
+  ok(!x7.error && /หลุด/.test(n7r) && !/หลุด/.test(n7s), 'D-77 with D-78: a lost filling (7r) does not open a paid re-seal; a lost sealant (7s) does', JSON.stringify([n7r, n7s]));
 
   console.log('fee schedule 03 (control, A)');
   const A = await login('public-control');
@@ -276,6 +284,6 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const evDel = await C.from('evidence').delete().eq('id', evRow.data.id).select();
   ok(!evRm.error && !evDel.error && evDel.data.length === 1, 'the unit removes a file uploaded by mistake');
 
-  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kc2}, ${kaU}, ${kaN}`);
+  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kc2}, ${kc3}, ${kaU}, ${kaN}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });

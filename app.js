@@ -216,7 +216,7 @@ function buildPlan(k) {
 // Exams of one child, oldest first. Follow-up exams (v1.3) sit beside the first exam in unit.exams.
 const kidExams = (u, id) => u.exams.filter(e => e.study_id === id)
   .sort((a, b) => a.exam_date.localeCompare(b.exam_date) || String(a.created_at).localeCompare(String(b.created_at)));
-const putExam = (u, row) => { const i = u.exams.findIndex(e => e.id === row.id); if (i >= 0) u.exams[i] = row; else u.exams.push(row); };
+const putExam = (u, row) => { const i = u.exams.findIndex(e => e.id === row.id); if (i >= 0) u.exams[i] = row; else u.exams.push(row); S.exVer = (S.exVer || 0) + 1; };
 // The latest attended exam before ex, or the latest of all when ex is null.
 function prevExam(u, id, ex) {
   const xs = kidExams(u, id).filter(e => e.attended && (!ex || e.id !== ex.id));
@@ -237,12 +237,14 @@ function lastTeeth(k) {
 // - a re-seal where an exam records a sealant lost or partial (Code A 0, 1, 7) on a first molar sealed before it, the
 //   same test the project pays a re-seal by (D-77);
 // - a first sealant for a first molar that a follow-up finds needing one and the first exam's plan lacks.
-// An open item stays through later exams; one that records the sealant full closes it unless it is done.
-function fuRows(u, k) {
+// An open item stays through later exams; one that records the sealant full closes it unless it is done. A done item
+// stays in the plan, up to the exam that opens the next one on that tooth (v1.3.1, review R2-05).
+function fuRowsRaw(u, k) {
   const xs = kidExams(u, k.id).filter(e => e.attended);
   if (xs.length < 2) return [];
-  const txs = (u.txByKid[k.id] || []).filter(x => x.code === '171' || x.code === '172'), open = {};
-  const doneFrom = (p, o) => txs.some(x => x.tooth === p && x.date >= o.from && (!o.reseal || x.code === '171'));
+  const txs = (u.txByKid[k.id] || []).filter(x => x.code === '171' || x.code === '172'), open = {}, done = [];
+  // Done as seen at exam d: a 171 (or 172) from the item's start up to the day before (R3-01); "full" also counts that day.
+  const doneBy = (p, o, d, sameDay) => txs.some(x => x.tooth === p && x.date >= o.from && (sameDay ? x.date <= d : x.date < d) && (!o.reseal || x.code === '171'));
   const inPlan = p => k.teeth && k.teeth[p] && k.teeth[p].t === 'p' && needOf(p, k) === 2;
   for (let i = 1; i < xs.length; i++) {
     const e = xs[i];
@@ -251,23 +253,50 @@ function fuRows(u, k) {
     for (const p of FPM) {
       const t = e.teeth && e.teeth[p], cur = open[p];
       if (!t || t.t !== 'p') continue;
-      if (before.includes(p) && [0, 1, 7].includes(+t.A)) { if (!cur || doneFrom(p, cur)) open[p] = { reseal: true, from: d, e, A: +t.A }; }
-      else if (+t.A === 2) { if (cur && !doneFrom(p, cur)) delete open[p]; }
+      // A sealant lost or partial: Code A 0, 1, or 7 unless it is a filling that was lost (7r, D-78)
+      if (before.includes(p) && ([0, 1].includes(+t.A) || (+t.A === 7 && t.lost !== 'r'))) {
+        if (inPlan(p) && !txs.some(x => x.tooth === p && x.date < d)) continue;   // the first exam's sealant row is still open (R3-02)
+        if (cur && doneBy(p, cur, d)) { cur.to = d; done.push([p, cur]); }
+        if (!cur || cur.to) open[p] = { reseal: true, from: d, e, A: +t.A };
+      } else if (+t.A === 2) { if (cur && !doneBy(p, cur, d, true)) delete open[p]; }
       else if (!cur && t.need === 2 && !inPlan(p) && !txs.some(x => x.tooth === p)) open[p] = { reseal: false, from: d, e, occ: t.occ ?? t.B };
     }
   }
-  return Object.entries(open).map(([pp, o]) => {
-    const p = +pp, when = `${ROUND_TH[o.e.round] || o.e.round} ${thShort(o.from)}`;
+  return [...done, ...Object.entries(open)].map(([pp, o]) => {
+    const p = +pp, when = `${ROUND_TH[o.e.round] || o.e.round} ${thShort(o.from)}`, key = `${o.reseal ? 'reseal' : 'fuseal'}-${p}-${toInput(o.from)}`;
     const last = txs.filter(x => x.tooth === p && x.code === '171' && x.date < o.from).pop();
-    const did = txs.find(x => x.tooth === p && x.code === '171' && x.date >= o.from);
+    const did = txs.find(x => x.tooth === p && x.code === '171' && x.date >= o.from && (!o.to || x.date < o.to));
     // Control (03): one sealant per tooth per NHSO year, so a re-seal in the same year as the last is not paid (D-77)
     const ctl = u.arm === 'control' && last && fyOf(last.date) === fyOf(did ? did.date : TODAY) ? ' · กลุ่มควบคุม: ปีงบเดียวกับการเคลือบครั้งก่อน โครงการไม่จ่าย' : '';
     return o.reseal
-      ? { key: `reseal-${p}`, code: '171', codes: ['171'], tooth: p, anytime: true, from: o.from, fu: true, reseal: true, label: 'เคลือบหลุมร่องฟันซ้ำ',
+      ? { key, code: '171', codes: ['171'], tooth: p, anytime: true, from: o.from, to: o.to || null, fu: true, reseal: true, label: 'เคลือบหลุมร่องฟันซ้ำ',
         sub: `${when}: สารเคลือบ${o.A === 1 ? 'เหลือบางส่วน' : 'หลุด'} · รายการจากผลตรวจติดตาม${ctl}` }
-      : { key: `fuseal-${p}`, code: '171', codes: o.occ === 3 ? ['171', '172'] : ['171'], tooth: p, anytime: true, from: o.from, fu: true, label: 'เคลือบหลุมร่องฟัน',
+      : { key, code: '171', codes: o.occ === 3 ? ['171', '172'] : ['171'], tooth: p, anytime: true, from: o.from, to: null, fu: true, label: 'เคลือบหลุมร่องฟัน',
         sub: `${when}: ผลตรวจติดตามพบว่าต้องเคลือบ · รายการจากผลตรวจติดตาม` };
-  });
+  }).sort((x, y) => x.tooth - y.tooth || x.from - y.from);
+}
+// fuRows is read for every child on every list; keep one result per child until its services or exams change.
+const fuMemo = new WeakMap();
+function fuRows(u, k) {
+  if (k.dirty) return fuRowsRaw(u, k);   // the first exam is being edited: its plan changes with every tap (R3-06)
+  const ver = `${S.txVer}|${S.exVer || 0}`, m = fuMemo.get(k);
+  if (m && m.ver === ver) return m.rows;
+  const rows = fuRowsRaw(u, k);
+  fuMemo.set(k, { ver, rows });
+  return rows;
+}
+// The date the first follow-up item of a tooth starts: sealants from then on belong to the follow-up rows.
+const fuStart = (u, k, p) => { const r = fuRows(u, k).find(x => x.tooth === p); return r ? r.from : null; };
+// Teeth present on a date: the latest attended exam on or before it, else the latest exam (v1.3.1, review R2-04).
+function teethAt(k, date) {
+  const u = S.units[k.unit], xs = u && date ? kidExams(u, k.id).filter(x => x.attended && fromInput(x.exam_date) <= date) : [];
+  const e = xs.pop(), prev = xs.pop();
+  if (!e || !e.teeth) return lastTeeth(k);
+  // On the exam day the service may have come first: a tooth that exam found gone is still offered (R3-07).
+  if (!prev || !prev.teeth || +fromInput(e.exam_date) !== +date) return e.teeth;
+  const m = { ...e.teeth };
+  for (const p of POS) if (m[p] && m[p].t === 'n' && prev.teeth[p] && prev.teeth[p].t !== 'n') m[p] = prev.teeth[p];
+  return m;
 }
 const studyExam = (u, k, m) => u.exams.find(e => e.study_id === k.id && e.attended && e.round === (m === 6 ? 'm6' : 'm12'));
 
@@ -313,7 +342,10 @@ function unitBudget(u) {
   t.fillIn = u.van_fills === true ? t.fill : 0;
   t.cap = t.plan + t.fillIn - t.nhso;
   t.ceil = (t.plan + t.fillIn) * 1.2 - t.nhso;
-  t.dataFee = 100 * t.n;   // data-collection fee per round-1 exam, apart from services (D-36, D-50)
+  const roundN = r => u.exams.filter(e => e.round === r && e.attended && u.byId[e.study_id]).length;
+  t.n6 = roundN('m6'); t.n12 = roundN('m12');
+  t.dataFee = 100 * (t.n + t.n6 + t.n12);   // data-collection fee per project-round exam, apart from services (D-30, D-36, D-50)
+  t.dataFeeText = `รอบแรก ${t.n} คน${t.n6 ? ` · รอบ 6 เดือน ${t.n6} คน` : ''}${t.n12 ? ` · รอบ 12 เดือน ${t.n12} คน` : ''} × 100 บาท`;
   return t;
 }
 // Claim arms: project amounts of sent, approved and paid services; drafts and returned ones apart.
@@ -329,7 +361,8 @@ const CAT_TH = { seal: 'เคลือบหลุมร่องฟัน', fl
 const catOf = row => CAT[row.code] || 'tx';
 // A row from a follow-up exam counts services from its exam date; a first-exam row leaves out the follow-up items.
 const rowTx = (u, k, row) => (u.txByKid[k.id] || []).filter(t => row.codes.includes(t.code) && (row.tooth == null || t.tooth === row.tooth)
-  && (row.from ? t.date >= row.from : !/^(reseal|fuseal)-/.test(t.planKey || '')));
+  && (row.from ? t.date >= row.from && (!row.to || t.date < row.to)
+    : !/^(reseal|fuseal)-/.test(t.planKey || '') && !((t.code === '171' || t.code === '172') && row.tooth != null && fuStart(u, k, row.tooth) && t.date >= fuStart(u, k, row.tooth))));
 const pname = code => (PRICE[code] ? PRICE[code].name : code);
 const pshort = code => (PRICE[code] ? PRICE[code].short : code);
 const chipText = (row, m) => {
@@ -731,7 +764,7 @@ function moneySection(u) {
     tiles.push(tile('เบิกแล้ว', `${fmt(c.claimed)} บาท`, `อนุมัติแล้ว ${fmt(c.approved + c.paid)} บาท`), tile('ร่างยังไม่ส่ง', `${fmt(c.draft)} บาท`));
   }
   tiles.push(tile('ได้รับโอนแล้ว', `${fmt(got)} บาท`, `${u.transfers.length} รายการ`),
-    tile('ค่าตอบแทนเก็บข้อมูลรอบ 1', `${fmt(b.dataFee)} บาท`, `${b.n} คน × 100 บาท แยกจากค่าบริการ`));
+    tile('ค่าตอบแทนเก็บข้อมูล', `${fmt(b.dataFee)} บาท`, `${b.dataFeeText} แยกจากค่าบริการ`));
   const notes = [];
   if (u.arm !== 'control') {
     notes.push(`ที่มาของยอด: แผนการดูแลตามอัตราค่าบริการ ${fmt(b.plan)} บาท` + (u.van_fills === true ? ` + อุดฟัน ${b.fillN} ซี่ ${fmt(b.fill)} บาท` : '')
@@ -1117,7 +1150,7 @@ async function deleteChild(k) {
   if (ans.trim() !== k.id) { toast('รหัสไม่ตรง ยังไม่ได้ลบ'); return; }
   const { error } = await sb.rpc('delete_child', { p_study_id: k.id });
   if (error) { toastErr(error); return; }
-  u.kids = u.kids.filter(x => x !== k); delete u.byId[k.id]; u.tx = u.tx.filter(t => t.kid !== k.id); u.exams = u.exams.filter(e => e.study_id !== k.id); reindex(u);
+  u.kids = u.kids.filter(x => x !== k); delete u.byId[k.id]; u.tx = u.tx.filter(t => t.kid !== k.id); u.exams = u.exams.filter(e => e.study_id !== k.id); S.exVer = (S.exVer || 0) + 1; reindex(u);
   k.dirty = false; k.editing = false; S.kid = null; S.fu = null; hideSaveBar();
   toast(`ลบแฟ้ม ${k.id} แล้ว`);
   show('kids');
@@ -1183,6 +1216,8 @@ const needsChartOk = x => x.fu && (x.round === 'm6' || x.round === 'm12');
 // 'r' filling (7r), null when the tooth had both and the examiner has to say. On the first exam 7 is a filling.
 function inferLost(k, pos) {
   if (!k.fu) return 'r';
+  const pt = k.prev && k.prev.teeth[pos];
+  if (pt && +pt.A === 7 && pt.lost) return pt.lost;   // still lost since the last exam (R3-03)
   const u = unit(), no = toothNo(pos, k.teeth[pos]), prevA = k.prev && k.prev.teeth[pos] ? +k.prev.teeth[pos].A : null;
   const txs = (u.txByKid[k.id] || []).filter(t => t.tooth === no && t.date <= (k.examDate || TODAY));
   const seal = [1, 2].includes(prevA) || txs.some(t => t.code === '171' || t.code === '172');
@@ -1246,7 +1281,8 @@ function examHistory(u, kid, cur) {
     el('span', { class: 'tiny muted', text: can ? 'แผนการดูแลยังใช้ผลตรวจครั้งแรก' : 'บันทึกผลตรวจติดตามได้เมื่อมีความยินยอมครบ' })));
 }
 // Every tooth sealed before is stated full, partial or lost: the project pays a re-seal only after a recorded loss
-// (D-77). Lost is Code A 7 with "7s" (sealant), which DMFT does not count as a filling (D-78).
+// (D-77). Lost is Code A 7 with "7s" (sealant), which DMFT does not count as a filling (D-78); a lost filling (7r) is
+// not a lost sealant.
 function renderSealRet(k) {
   const box = $('#sealRet');
   if (!box) return;
@@ -1364,7 +1400,7 @@ $('#vRound')?.addEventListener('change', e => {
   if (e.target.value === 'recall' && !planRecall(k.kid) && !confirm('นักเรียนคนนี้ไม่มีตรวจซ้ำในแผน (ตรวจติดตามรวมกับตรวจรอบโครงการ 6 และ 12 เดือน)\nบันทึกเป็นตรวจซ้ำนอกแผนหรือไม่')) { e.target.value = k.round; return; }
   const had = needsRisk(k);
   k.round = e.target.value;
-  if (needsRisk(k) !== had) k.risk = needsRisk(k) ? {} : clone(k.prev ? k.prev.risk : {});   // the yearly assessment starts empty
+  if (needsRisk(k) !== had) k.risk = needsRisk(k) ? (k.exam && k.exam.round === 'm12' ? clone(k.exam.risk) : {}) : clone(k.prev ? k.prev.risk : {});   // the yearly assessment starts empty
   afterExamChange();
 });
 function setPresence(k, pos, v) {
@@ -1628,7 +1664,7 @@ async function saveFollowUp(u, x, row) {
   if (res.error && /exams_one_per_study_round/.test(res.error.message || '')) {
     // Saved from another device meanwhile: refresh this child's exams, keep what was entered (F-07, R1)
     const { data } = await sb.from('exams').select('*').eq('study_id', x.id);
-    if (data) u.exams = u.exams.filter(e => e.study_id !== x.id).concat(data);
+    if (data) { u.exams = u.exams.filter(e => e.study_id !== x.id).concat(data); S.exVer = (S.exVer || 0) + 1; }
     toast(`บันทึก${ROUND_TH[row.round]}ของนักเรียนคนนี้ไว้แล้ว (อาจจากอีกเครื่อง) ข้อมูลที่กรอกยังอยู่ กด "ยกเลิกการแก้ไข" แล้วเปิดผลตรวจที่มีอยู่เพื่อเทียบและแก้`, 9000);
     renderExam(); syncSaveBar();
     return;
@@ -1827,9 +1863,7 @@ function renderPlanGrid() {
   $('#planHint').textContent = (u.arm === 'cap' ? 'ติ๊กช่องในแผนเมื่อให้บริการ ระบบบันทึกเป็นผลงาน' : 'ติ๊กช่องในแผนเมื่อให้บริการ ระบบสร้างรายการบริการ (ร่าง) ให้')
     + ` แตะช่องที่ทำแล้วเพื่อยกเลิก วันที่บริการ = วันนี้ (ช่องที่เลยกำหนดก็บันทึกวันนี้) ผู้บันทึกมาจากช่อง "ผู้บันทึก" ด้านบน บริการที่ให้วันอื่น บริการนอกแผน และกิจกรรมกลุ่ม บันทึกที่หน้า "${claimTab(u)}"`;
   renderPlanTotals(u, k, rows, cm);
-  $('#homecare').textContent = lvl === 'low'
-    ? 'แปรงฟันด้วยยาสีฟันผสมฟลูออไรด์ 1,000 ppm ขึ้นไป วันละ 2 ครั้ง · ผู้ปกครองแปรงซ้ำก่อนนอน · ลดขนมและเครื่องดื่มหวานนอกมื้อ'
-    : `แปรงฟันด้วยยาสีฟันผสมฟลูออไรด์ 1,450 ppm วันละ 2 ครั้ง · ผู้ปกครองแปรงซ้ำก่อนนอน · ขนมและเครื่องดื่มหวานนอกมื้อไม่เกินวันละ 2 ครั้ง · มาตามนัดทุก ${LEVEL[lvl].recall} เดือน`;
+  $('#homecare').textContent = homecareText(lvl);
 }
 function renderPlanTotals(u, k, rows, cm) {
   let main = 0, primN = 0, unpriced = 0, done = 0, dueN = 0;
@@ -1848,12 +1882,19 @@ function renderPlanTotals(u, k, rows, cm) {
     t('รายการฟันน้ำนม', `${primN} รายการ`, 'บันทึกได้ ไม่นับในงบโครงการ'),
     t('ทำแล้วตามกำหนด', `${done}/${dueN}`, `รายการที่ถึงกำหนดถึงเดือนที่ ${cm}`));
 }
+const homecareText = lvl => (lvl === 'low'
+  ? 'แปรงฟันด้วยยาสีฟันผสมฟลูออไรด์ 1,000 ppm ขึ้นไป วันละ 2 ครั้ง · ผู้ปกครองแปรงซ้ำก่อนนอน · ลดขนมและเครื่องดื่มหวานนอกมื้อ'
+  : `แปรงฟันด้วยยาสีฟันผสมฟลูออไรด์ 1,450 ppm วันละ 2 ครั้ง · ผู้ปกครองแปรงซ้ำก่อนนอน · ขนมและเครื่องดื่มหวานนอกมื้อไม่เกินวันละ 2 ครั้ง · มาตามนัดทุก ${LEVEL[lvl].recall} เดือน`);
 // Parent booklet (one A4 sheet folded into four A5 pages, booklet.html). The data goes through localStorage
 // and holds no names (D-64); the parent writes the child's name by hand.
 function bookletData(u, k) {
-  const school = u.schools.find(s => s.id === k.c.school_id), lvl = lvlOf(k);
+  // After a follow-up the booklet shows the latest exam (chart, findings, risk); the plan and its months stay on the
+  // first exam (v1.3.1).
+  const last = kidExams(u, k.id).filter(e => e.attended && e.round !== 'baseline').pop();
+  const ex = last ? (() => { const x = fuShell(k); applyExam(x, last); return x; })() : k;
+  const school = u.schools.find(s => s.id === k.c.school_id), lvl = lvlOf(ex);
   const teeth = POS.map(p => {
-    const t = k.teeth[p], n = needOf(p, k);
+    const t = ex.teeth[p], n = needOf(p, ex);
     return { pos: p, no: t.t === 'n' ? p : toothNo(p, t), jaw: UPPER.includes(p) ? 'upper' : 'lower', type: t.t, n_code: t.t === 'n' ? t.A : null,
       A: t.t === 'n' ? null : t.A, B: t.t === 'n' ? null : t.B, active: t.act === 'a' ? true : t.act === 'i' ? false : null,
       need: n, need_label: n != null ? NEED[n] : '', partial: !!t.partial };
@@ -1862,24 +1903,24 @@ function bookletData(u, k) {
   const plan = buildPlan(k).map(r => ({ label: rowName(r), tooth: r.tooth ?? null, category: r.study ? 'study' : catOf(r), months: r.anytime ? [] : r.months, anytime: !!r.anytime, prim: !!r.prim,
     done: r.study ? [] : rowTx(u, k, r).map(t => ({ month: r.anytime ? null : txMonth(k, t), date: toInput(t.date) })) }));
   return { v: 1, printed_on: toInput(TODAY),
-    child: { study_id: k.id, school: school ? school.name : '', class: k.cls || '', sex: sexTh(k), age_text: k.birth ? ageText(k, k.base) : '' },
+    child: { study_id: k.id, school: school ? school.name : '', class: k.cls || '', sex: sexTh(k), age_text: k.birth ? ageText(k, ex.base || k.base) : '' },
     unit: { name: u.name.split(' · ')[0] },   // TEST unit names carry the payment arm after " · "; parents never see it
-    exam: { date: toInput(k.base), place: PLACE[k.place] || '', examiner_code: k.examiner || '',
-      risk: { level: lvl, label: LEVEL[lvl].th, score: riskScore(k), recall_months: LEVEL[lvl].recall },
-      urgent: { ...k.urgent }, needs_referral: needsReferral(k), teeth,
+    exam: { date: toInput(k.base), findings_date: last ? last.exam_date : null, place: PLACE[ex.place] || '', examiner_code: ex.examiner || '',
+      risk: { level: lvl, label: LEVEL[lvl].th, score: riskScore(ex), recall_months: LEVEL[lvl].recall },
+      urgent: { ...ex.urgent }, needs_referral: needsReferral(ex), teeth,
       counts: { decayed_perm: cnt(t => t.type === 'p' && t.B >= 3), decayed_prim: cnt(t => t.type === 'd' && t.B >= 3), filled: cnt(t => [3, 4, 5, 6].includes(t.A)),
         sealed: cnt(t => [1, 2].includes(t.A)), need_seal: cnt(t => t.need === 2), need_fill: cnt(t => t.need === 4), need_refer: cnt(t => t.need >= 5) } },
     plan, month_labels: Array.from({ length: 12 }, (_, i) => thMon(addMonths(k.base, i + 1))),
     // Date span of each plan month, as in the plan grid (monthRange): month 1 starts on the exam day.
     month_ranges: Array.from({ length: 12 }, (_, i) => { const r = monthRange(k.base, i + 1); return { from: toInput(r.from), to: r.to ? toInput(r.to) : null }; }),
-    homecare: $('#homecare') ? $('#homecare').textContent : '', return_by: toInput(addMonths(k.base, 12)) };
+    homecare: homecareText(lvl), return_by: toInput(addMonths(k.base, 12)) };
 }
 $('#printBtn').addEventListener('click', () => {
   const u = unit(), k = curKid();
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
-  if (k.dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
+  if (k.dirty || exK().dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.3.0', '_blank');
+  const w = window.open('booklet.html?v=1.3.1', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -1892,7 +1933,7 @@ function planFor(k, { code, tooth, date }) {
   const u = unit(), m = monthOf(k.base, date);
   let doneAny = null;   // an anytime row already done (the first sealant) yields to an open one (a re-seal)
   for (const r of buildPlan(k)) {
-    if (r.study || !r.codes.includes(code) || (r.tooth != null && r.tooth !== tooth) || (r.from && date < r.from)) continue;
+    if (r.study || !r.codes.includes(code) || (r.tooth != null && r.tooth !== tooth) || (r.from && date < r.from) || (r.to && date >= r.to)) continue;
     if (r.anytime) { if (!rowTx(u, k, r).length) return { row: r, month: null, late: false }; doneAny = doneAny || r; continue; }
     const done = new Set(rowTx(u, k, r).map(t => txMonth(k, t)));
     if (r.months.includes(m) && !done.has(m)) return { row: r, month: m, late: false };
@@ -1905,7 +1946,7 @@ function planFor(k, { code, tooth, date }) {
 function planMatch(k, tx) {
   if (!k || !examined(k)) return null;
   const m = txMonth(k, tx);
-  return buildPlan(k).find(r => !r.study && r.codes.includes(tx.code) && (r.tooth == null || r.tooth === tx.tooth) && (!r.from || tx.date >= r.from) && (r.anytime || r.months.includes(m))) || null;
+  return buildPlan(k).find(r => !r.study && r.codes.includes(tx.code) && (r.tooth == null || r.tooth === tx.tooth) && (!r.from || tx.date >= r.from) && (!r.to || tx.date < r.to) && (r.anytime || r.months.includes(m))) || null;
 }
 async function saveOutcome(tx) {
   const v = prompt('ผลการส่งต่อ (เช่น รักษาแล้วที่โรงพยาบาล / ยังไม่ไปตามนัด) ห้ามใส่ชื่อ', tx.outcome || '');
@@ -1941,9 +1982,10 @@ function renderKidTx() {
 $('#kidAddBtn').addEventListener('click', () => { show('claims'); $('#cKid').value = S.kid; claimPreview(); $('#fOne').scrollIntoView({ block: 'start' }); });
 // A sealant of this permanent tooth is recorded lost or partial (Code A 0, 1, 7) by an attended exam dated after the
 // previous sealant and on or before this one: the only case where the project pays a reseal (D-77, v_services_pay).
+// Code A 7 counts unless it is a lost filling (7r, D-78).
 const sealLost = (u, kid, tooth, prev, upTo) => u.exams.some(e => {
   const d = fromInput(e.exam_date), t = e.teeth && e.teeth[tooth];
-  return e.study_id === kid && e.attended && d > prev && d <= upTo && t && t.t === 'p' && [0, 1, 7].includes(+t.A);
+  return e.study_id === kid && e.attended && d > prev && d <= upTo && t && t.t === 'p' && ([0, 1].includes(+t.A) || (+t.A === 7 && t.lost !== 'r'));
 });
 // Duplicate checks from v0.7 shown as notes; payable amounts follow the fee schedule (research team, v1.2).
 function txFlags(u) {
@@ -2002,12 +2044,12 @@ function setupClaimsForm(keep) {
 }
 // 02 §2: a filling is claimed for a tooth the round-1 screening flagged as needing restoration (need 4).
 const fillFlagged = (k, no) => POS.some(p => k.teeth[p].t !== 'n' && toothNo(p, k.teeth[p]) === no && needOf(p, k) === 4);
-function toothOptions(k, code) {
+function toothOptions(k, code, date) {
   const kind = PRICE[code] && PRICE[code].tooth;
   if (!kind) return null;
   const opts = [];
   if (kind === 'opt') opts.push(['', 'ไม่ระบุซี่']);
-  const teeth = lastTeeth(k);   // a first molar a follow-up found erupted can be sealed
+  const teeth = teethAt(k, date);   // as on the service date: a molar a follow-up found erupted, a tooth since lost
   for (const p of POS) {
     const t = teeth[p];
     if (!t || t.t === 'n') continue;
@@ -2025,7 +2067,7 @@ function claimPreview() {
   if (!k) { pv.append(el('span', { class: 'muted', text: none ? 'ยังไม่มีนักเรียนที่บันทึกผลตรวจแล้วและมีความยินยอมครบ บันทึกบริการรายคนได้หลังตรวจครั้งแรก' : 'เลือกนักเรียน' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; setIf('#cPlaceWrap', 'hidden', true); return; }
   if (!code) { pv.append(el('span', { class: 'muted', text: 'เลือกบริการ' })); $('#cSave').disabled = true; $('#cToothWrap').hidden = true; setIf('#cPlaceWrap', 'hidden', true); return; }
   setIf('#cPlaceWrap', 'hidden', !PLACE_CODES.includes(code));
-  const opts = toothOptions(k, code);
+  const opts = toothOptions(k, code, fromInput($('#cDate').value));
   const tSel = $('#cTooth');
   $('#cToothWrap').hidden = !opts;
   if (opts) { const prev = tSel.value; tSel.replaceChildren(...opts.map(([v, lab]) => el('option', { value: v, text: lab }))); if (opts.some(o => o[0] === prev)) tSel.value = prev; }
@@ -2402,7 +2444,7 @@ function moneyTable(ids) {
   }
   return el('section', {}, el('h2', { text: 'เงินแต่ละหน่วย' }),
     el('div', { class: 'tablewrap' }, el('table', { class: 'ledger' },
-      el('thead', {}, el('tr', {}, ...['หน่วย', 'ตรวจครั้งแรก', 'เหมาจ่าย / เพดาน', 'เบิกแล้ว', 'อนุมัติ รอโอน', 'โอนแล้ว', 'ค่าเก็บข้อมูลรอบ 1', 'รถอุดฟันได้', 'cohort'].map((h, i) => el('th', { scope: 'col', class: i >= 1 && i <= 6 ? 'num' : '', text: h })))), tb)),
+      el('thead', {}, el('tr', {}, ...['หน่วย', 'ตรวจครั้งแรก', 'เหมาจ่าย / เพดาน', 'เบิกแล้ว', 'อนุมัติ รอโอน', 'โอนแล้ว', 'ค่าเก็บข้อมูล', 'รถอุดฟันได้', 'cohort'].map((h, i) => el('th', { scope: 'col', class: i >= 1 && i <= 6 ? 'num' : '', text: h })))), tb)),
     el('p', { class: 'small muted', text: 'คำนวณจากผลตรวจครั้งแรก: เหมาจ่าย = แผนการดูแลตามอัตรา + อุดฟัน (ถ้ารถอุดฟันได้) − ส่วนที่เบิกจาก สปสช. (คนละ 700 บาท เด็กไม่มีสิทธิรัฐไม่หัก) · เพดาน = (แผน + อุดฟัน) × 1.2 − ส่วนที่เบิกจาก สปสช. · "รถอุดฟันได้" หน่วยตั้งเองตอนเริ่มใช้ ทีมวิจัยแก้ได้' }));
 }
 // The research team records a transfer with its slip; a claims transfer also marks that unit's approved services paid.
@@ -2423,7 +2465,8 @@ function transferForm(ids) {
   const suggest = () => {
     const u = S.units[uSel.value], b = unitBudget(u), ap = approvedOf(u), apSum = ap.reduce((a, t) => a + txAmt(u, t), 0);
     const lines = { claims: `อนุมัติแล้ว รอโอน ${ap.length} รายการ ${fmt2(apSum)} บาท`, advance: u.arm === 'cap' ? `งวดแรก 70% ของค่าเหมาจ่าย ${fmt2(b.cap * 0.7)} บาท` : 'ใช้กับหน่วยเหมาจ่ายรายหัว',
-      data_fee: `ค่าเก็บข้อมูลรอบ 1: ${b.n} คน × 100 = ${fmt2(b.dataFee)} บาท` };
+      data_fee: (() => { const sent = (u.transfers || []).filter(t => t.kind === 'data_fee').reduce((a, t) => a + +t.amount, 0);
+        return `ค่าเก็บข้อมูล: ${b.dataFeeText} = ${fmt2(b.dataFee)} บาท${sent ? ` · โอนแล้ว ${fmt2(sent)} บาท · คงเหลือ ${fmt2(b.dataFee - sent)} บาท` : ''}`; })() };
     fill(info, el('span', { class: 'small', text: lines[kSel.value] || 'ใส่จำนวนเงินตามสลิป' }));
     $('#tMarkWrap').hidden = kSel.value !== 'claims';
     $('#tMarkText').textContent = ` เปลี่ยนรายการที่อนุมัติแล้วของหน่วยนี้ ${ap.length} รายการ (${fmt2(apSum)} บาท) เป็น "โอนแล้ว"`;

@@ -288,6 +288,7 @@
       projectName: cleanText(project.name) || DEFAULT_PROJECT,
       projectOwner: cleanText(project.owner),
       examDate,
+      findDate: parseISO(ex.findings_date),   // the latest follow-up exam, when there is one (v1.3.1)
       schoolYear: schoolYear(examDate),
       place: cleanText(ex.place),
       examiner: str(ex.examiner_code),
@@ -498,7 +499,7 @@
   // Page 2: exam results
   function pageResults(M, hatch) {
     const meta = h('div', { class: 'meta' },
-      h('span', {}, 'ตรวจวันที่ ', M.examDate ? h('b', { text: beDate(M.examDate) }) : blank('25mm')),
+      h('span', {}, 'ตรวจวันที่ ', (M.findDate || M.examDate) ? h('b', { text: beDate(M.findDate || M.examDate) }) : blank('25mm')),
       M.place ? h('span', {}, 'ที่ ', M.place) : null,
       M.age ? h('span', {}, 'อายุ ', M.age) : null,
       M.examiner ? h('span', {}, 'ผู้ตรวจ รหัส ', M.examiner) : null);
@@ -565,7 +566,7 @@
 
     return h('div', { class: 'page results', 'data-page': '2' },
       rhead(M),
-      h('h2', { text: 'ผลการตรวจฟันครั้งแรก' }), meta, risk, chart, keys,
+      h('h2', { text: M.findDate ? 'ผลการตรวจฟันครั้งล่าสุด' : 'ผลการตรวจฟันครั้งแรก' }), meta, risk, chart, keys,
       h('div', { class: 'sum' }, found, todo),
       urgentPanel(M),
       h('div', { class: 'pfoot' }, h('span', { class: 'pno', text: '2' }), M.unit ? h('span', { text: `ตรวจโดย ${M.unit}` }) : null));
