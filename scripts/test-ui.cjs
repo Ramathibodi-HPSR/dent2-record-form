@@ -649,6 +649,41 @@ let refId = null;
   ok(cr.lowLesion[0] === 6, 'low risk with an inactive lesion keeps every 6 months (open, WS2-3 point 2)', JSON.stringify(cr.lowLesion));
   ok(cr.wait[0] && cr.wait[1] && !cr.wait[2], 'a referral waits for its result until one is recorded ("ยังไม่ไปพบทันตแพทย์" still waits)', JSON.stringify(cr.wait));
 
+
+  // ICDAS 5–6 found at a follow-up exam: a referral row outside the round-1 budget (Percy 4 Nov evening, D-83).
+  const fr = H.w.eval(`(() => {
+    const D = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+    const POS = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36], EARLY = [16, 26, 36, 46, 11, 21, 31, 32, 41, 42];
+    const mouth = (e = {}) => { const m = {}; for (const p of POS) m[p] = EARLY.includes(p) ? { t: 'p', A: 0, B: 0, act: null } : { t: 'd', A: 0, B: 0, act: null }; for (const [p, v] of Object.entries(e)) Object.assign(m[p], v); return m; };
+    const risk = { r1: 'n', r2: 'y', r3: 'n', r4: 'n', r5: 'n', r6: 'n', r7: 'y', r8: 'n' };
+    const ex = (id, round, date, teeth) => ({ id, study_id: 'X', unit_id: 'U', round, exam_date: date, attended: true, created_at: date + 'T00:00:00Z', teeth, risk, pigi: {}, urgent: {}, need_override: {}, override_reason: {}, fl_override: null, place: 'van', examiner_code: 'E1' });
+    const base = ex('b', 'baseline', '2026-11-05', mouth({ 46: { B: 5, act: 'a' } }));
+    const m6 = ex('m6', 'm6', '2027-05-03', mouth({ 46: { B: 5, act: 'a' }, 36: { B: 6, act: 'a' }, 15: { B: 5, act: 'a' } }));
+    const m12 = ex('m12', 'm12', '2027-11-03', mouth({ 46: { B: 5, act: 'a' }, 36: { B: 6, act: 'a' }, 26: { B: 5, act: 'a' } }));
+    const kid = () => __t.kidFrom({ study_id: 'X', unit_id: 'U', school_id: 's', class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', coverage: 'uc' }, base);
+    const ref36 = { id: 9, kid: 'X', code: 'REF', tooth: 36, date: D('2027-05-04'), planKey: 'furef-36-2027-05-03', refStatus: null, status: 'recorded' };
+    const u0 = { id: 'U', arm: 'cap', ptype: 'public', name: 'หน่วย X', schools: [], exams: [base], txByKid: {} };
+    const u = { ...u0, exams: [base, m6, m12], txByKid: { X: [ref36] } };
+    const k0 = kid(), k = kid();
+    __t.S.units = { U: u0 };   // buildPlan reads the unit (and its follow-up rows) from the app state
+    const b0 = __t.childBudget(u0, k0);
+    __t.S.units = { U: u };
+    const rows = __t.fuRows(u, k).filter(r => r.code === 'REF');
+    const plan = __t.buildPlan(k).filter(r => r.code === 'REF');
+    const out = { rows: rows.map(r => [r.tooth, r.key, r.label, !!r.prim, __t.rowTx(u, k, r).length]), plan: plan.map(r => r.key),
+      b0, b1: __t.childBudget(u, k), st: __t.kidState(u, k), base46: __t.rowTx(u, k, plan.find(r => r.key === 'ref-46')).length };
+    __t.S.units = {};
+    return out;
+  })()`);
+  const REF_L2 = 'ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่';
+  ok(fr.rows.length === 3 && fr.rows.every(r => r[2] === REF_L2) && fr.rows.map(r => r[0]).join() === '26,36,55',
+    'follow-up exams: ICDAS 5–6 teeth not referred before get "ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่" (36 and primary 55 at 6 months, 26 at 12 months)', JSON.stringify(fr.rows));
+  ok(!fr.rows.some(r => r[0] === 46) && fr.plan.includes('ref-46') && fr.plan.filter(x => /^furef-36-/.test(x)).length === 1,
+    'one referral per tooth: 46 (referred at the first exam) and 36 (found again at 12 months) get no second row', JSON.stringify(fr.plan));
+  ok(fr.rows.find(r => r[0] === 36)[4] === 1 && fr.base46 === 0 && fr.rows.find(r => r[0] === 55)[3], 'ticking the follow-up referral marks it done and not the first exam\'s referral; 55 is a primary tooth', JSON.stringify(fr.rows));
+  ok(JSON.stringify(fr.b0) === JSON.stringify(fr.b1), 'the round-1 budget stays the same with the follow-up referrals (Percy: งบต้องนิ่ง)', JSON.stringify([fr.b0, fr.b1]));
+  ok(fr.st.miss.concat(fr.st.due).filter(x => x.c === 'ref').length === 3, 'the child card lists the referrals still to send (46 from the first exam, 26 and 55 from follow-ups)', JSON.stringify(fr.st.miss.concat(fr.st.due)));
+
   console.log(`\n${pass} passed, ${fail} failed · enrolled ${newId}${refId ? `, ${refId}` : ''}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });

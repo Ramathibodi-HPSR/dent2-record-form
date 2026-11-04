@@ -260,10 +260,13 @@ function lastTeeth(k) {
 // - a first sealant for a first molar that a follow-up finds needing one and the first exam's plan lacks.
 // An open item stays through later exams; one that records the sealant full closes it unless it is done. A done item
 // stays in the plan, up to the exam that opens the next one on that tooth (v1.3.1, review R2-05).
+// - a referral to the centre's dentist (D-80) for a tooth a follow-up finds at ICDAS 5–6, once per tooth, unless the
+//   first exam's plan already refers or treats it. Outside the round-1 budget, which stays as it was (Percy 4 Nov, D-83).
 function fuRowsRaw(u, k) {
   const xs = kidExams(u, k.id).filter(e => e.attended);
   if (xs.length < 2) return [];
   const txs = (u.txByKid[k.id] || []).filter(x => x.code === '171' || x.code === '172'), open = {}, done = [];
+  const referred = new Set(k.teeth ? POS.filter(p => k.teeth[p] && k.teeth[p].t !== 'n' && refers(p, k)).map(p => toothNo(p, k.teeth[p])) : []), refs = [];
   // Done as seen at exam d: a 171 (or 172) from the item's start up to the day before (R3-01); "full" also counts that day.
   const doneBy = (p, o, d, sameDay) => txs.some(x => x.tooth === p && x.date >= o.from && (sameDay ? x.date <= d : x.date < d) && (!o.reseal || x.code === '171'));
   const inPlan = p => k.teeth && k.teeth[p] && k.teeth[p].t === 'p' && needOf(p, k) === 2;
@@ -271,6 +274,12 @@ function fuRowsRaw(u, k) {
     const e = xs[i];
     if (e.round === 'baseline') continue;
     const d = fromInput(e.exam_date), before = sealPositions(u, k, e.teeth, xs[i - 1], addDays(d, -1));
+    for (const p of POS) {
+      const t = e.teeth && e.teeth[p];
+      if (!t || t.t === 'n' || +t.B < 5) continue;
+      const no = toothNo(p, t);
+      if (!referred.has(no)) { referred.add(no); refs.push({ no, from: d, e, B: +t.B, prim: t.t === 'd' }); }
+    }
     for (const p of FPM) {
       const t = e.teeth && e.teeth[p], cur = open[p];
       if (!t || t.t !== 'p') continue;
@@ -294,7 +303,9 @@ function fuRowsRaw(u, k) {
         sub: `${when}: สารเคลือบ${o.A === 1 ? 'เหลือบางส่วน' : 'หลุด'} · รายการจากผลตรวจติดตาม${ctl}` }
       : { key, code: '171', codes: o.occ === 3 ? ['171', '172'] : ['171'], tooth: p, anytime: true, from: o.from, to: null, fu: true, label: 'เคลือบหลุมร่องฟัน',
         sub: `${when}: ผลตรวจติดตามพบว่าต้องเคลือบ · รายการจากผลตรวจติดตาม` };
-  }).sort((x, y) => x.tooth - y.tooth || x.from - y.from);
+  }).concat(refs.map(o => ({ key: `furef-${o.no}-${toInput(o.from)}`, code: 'REF', codes: ['REF'], tooth: o.no, anytime: true, from: o.from, to: null, fu: true, prim: o.prim, urgent: true,
+    label: REF_CENTRE, sub: `${ROUND_TH[o.e.round] || o.e.round} ${thShort(o.from)}: ICDAS ${o.B} · รายการจากผลตรวจติดตาม นอกงบโครงการ · ติ๊กเมื่อส่งต่อ แล้วบันทึกผลว่านักเรียนไปพบทันตแพทย์หรือยัง` +
+      (o.prim ? ' · ฟันน้ำนม' : '') }))).sort((x, y) => x.tooth - y.tooth || x.from - y.from);
 }
 // fuRows is read for every child on every list; keep one result per child until its services or exams change.
 const fuMemo = new WeakMap();
@@ -307,7 +318,7 @@ function fuRows(u, k) {
   return rows;
 }
 // The date the first follow-up item of a tooth starts: sealants from then on belong to the follow-up rows.
-const fuStart = (u, k, p) => { const r = fuRows(u, k).find(x => x.tooth === p); return r ? r.from : null; };
+const fuStart = (u, k, p) => { const r = fuRows(u, k).find(x => x.tooth === p && x.code === '171'); return r ? r.from : null; };
 // Teeth present on a date: the latest attended exam on or before it, else the latest exam (v1.3.1, review R2-04).
 function teethAt(k, date) {
   const u = S.units[k.unit], xs = u && date ? kidExams(u, k.id).filter(x => x.attended && fromInput(x.exam_date) <= date) : [];
@@ -383,11 +394,11 @@ const catOf = row => CAT[row.code] || 'tx';
 // A row from a follow-up exam counts services from its exam date; a first-exam row leaves out the follow-up items.
 const rowTx = (u, k, row) => (u.txByKid[k.id] || []).filter(t => row.codes.includes(t.code) && (row.tooth == null || t.tooth === row.tooth)
   && (row.from ? t.date >= row.from && (!row.to || t.date < row.to)
-    : !/^(reseal|fuseal)-/.test(t.planKey || '') && !((t.code === '171' || t.code === '172') && row.tooth != null && fuStart(u, k, row.tooth) && t.date >= fuStart(u, k, row.tooth))));
+    : !/^(reseal|fuseal|furef)-/.test(t.planKey || '') && !((t.code === '171' || t.code === '172') && row.tooth != null && fuStart(u, k, row.tooth) && t.date >= fuStart(u, k, row.tooth))));
 const pname = code => (PRICE[code] ? PRICE[code].name : code);
 const pshort = code => (PRICE[code] ? PRICE[code].short : code);
 const chipText = (row, m) => {
-  if (row.fu) return `${row.reseal ? 'เคลือบซ้ำ' : 'เคลือบ'} ${row.tooth}`;
+  if (row.fu && row.code === '171') return `${row.reseal ? 'เคลือบซ้ำ' : 'เคลือบ'} ${row.tooth}`;
   const c = catOf(row);
   if (c === 'seal') return `เคลือบ ${row.tooth}`;
   if (c === 'fl') return `ฟลูออไรด์ ด.${m}`;
@@ -1384,7 +1395,9 @@ function renderExam() {
   const refTeeth = POS.filter(p => refers(p, k)).map(p => toothNo(p, k.teeth[p]));
   const um = $('#urgentMsg'); um.replaceChildren();
   if (urg) um.append(el('div', { class: 'alert', text: '⛔ ต้องได้รับการรักษาเร่งด่วน ระบบเพิ่มรายการส่งต่อในแผน ไม่ใช้ฟลูออไรด์หรือ SDF เป็นการรักษาเดียว' }));
-  else if (refTeeth.length) um.append(el('div', { class: 'hint', text: `ฟัน ${refTeeth.join(', ')} ต้องส่งต่อหรือรักษา ระบบเพิ่มรายการในแผน · ICDAS 5–6 ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่ (ICDAS 5 นับเป็นฟันที่ต้องอุดด้วย)` }));
+  else if (refTeeth.length) um.append(el('div', { class: 'hint', text: k.fu
+    ? `ฟัน ${refTeeth.join(', ')} ต้องส่งต่อหรือรักษา · ซี่ ICDAS 5–6 ที่ยังไม่เคยส่งต่อ ระบบเพิ่มรายการส่งต่อทันตแพทย์ที่ศูนย์ในแผน งบไม่เปลี่ยน (คิดจากผลตรวจครั้งแรก)`
+    : `ฟัน ${refTeeth.join(', ')} ต้องส่งต่อหรือรักษา ระบบเพิ่มรายการในแผน · ICDAS 5–6 ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่ (ICDAS 5 นับเป็นฟันที่ต้องอุดด้วย)` }));
   const body = $('#riskBody'); body.replaceChildren();
   for (const q of RISK) {
     if (q.sec) { body.append(el('tr', { class: 'sec' }, el('th', { colspan: '2', scope: 'colgroup', text: q.sec }))); continue; }
@@ -1728,7 +1741,7 @@ async function saveFollowUp(u, x, row) {
     if (mine.length > open.length) note += ' · บริการตรวจ (174) ของวันนั้นส่งเบิกไปแล้ว แจ้งทีมวิจัย';
   } else if (!isRecall && (first || wasRecall)) note = ' · ตรวจรอบโครงการเป็นการเก็บข้อมูล ไม่บันทึกเป็นบริการ 174';
   const rs = fuRows(u, kid).filter(r => !rowTx(u, kid, r).length);
-  if (rs.length) note += ` · แผนการดูแลมี ${rs.map(r => `${r.reseal ? 'เคลือบซ้ำ' : 'เคลือบ'} ซี่ ${r.tooth}`).join(', ')}`;
+  if (rs.length) note += ` · แผนการดูแลมี ${rs.map(r => `${r.code === 'REF' ? 'ส่งต่อ' : r.reseal ? 'เคลือบซ้ำ' : 'เคลือบ'} ซี่ ${r.tooth}`).join(', ')}`;
   toast(`${first ? 'บันทึกผลตรวจติดตามแล้ว' : 'บันทึกการแก้ไขผลตรวจติดตามแล้ว'} · ${kid.id}${note}`, /ไม่สำเร็จ|แจ้งทีมวิจัย/.test(note) ? 8000 : 5000);
   renderFile();
 }
