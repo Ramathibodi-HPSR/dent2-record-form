@@ -154,6 +154,15 @@ function riskScore(k) { let s = 0; for (const q of RISK) if (q.id) s += k.risk[q
 const riskLevel = s => (s <= 2 ? 'low' : s <= 5 ? 'high' : 'vhigh');
 const lvlOf = k => riskLevel(riskScore(k));
 const riskAnswered = k => RISK_IDS.filter(id => k.risk[id] === 'y' || k.risk[id] === 'n').length;
+// Risk item 2 follows the chart (Percy 4 Nov): an active lesion (ICDAS 1–4, saved as active unless marked inactive) or a
+// cavity (ICDAS 5–6) answers it "yes" (3 points, so at least high risk). When the chart no longer shows one, the
+// examiner's own earlier answer comes back.
+const activeOrCav = k => POS.some(p => { const t = k.teeth[p]; return t.t !== 'n' && ((t.B >= 1 && t.B <= 4 && t.act !== 'i') || t.B >= 5); });
+const r2Forced = k => needsRisk(k) && activeOrCav(k);
+function syncR2(k) {
+  if (r2Forced(k)) { if (!k.r2Auto) { k.r2Auto = true; k.r2Prev = k.risk.r2; } k.risk.r2 = 'y'; }
+  else if (k.r2Auto) { k.r2Auto = false; if (k.r2Prev == null) delete k.risk.r2; else k.risk.r2 = k.r2Prev; }
+}
 // Treatment need from the final form's table (D-37). ICDAS 5–6, primary teeth too and whatever Code A says: refer to the
 // centre's dentist to confirm whether the pulp is involved, before treatment (D-80). ICDAS 5 stays a filling (4), counted
 // in the round-1 filling budget (D-60), with the referral row beside it; ICDAS 6 is a referral (8) (Percy 4 Nov 16:30).
@@ -488,7 +497,7 @@ function applyExam(k, ex) {
   k.status = !ex ? 'new' : ex.attended ? 'examined' : 'absent';
   k.base = ex && ex.attended ? fromInput(ex.exam_date) : null;
   k.examDate = ex ? fromInput(ex.exam_date) : null;
-  k.risk = ex && ex.attended ? clone(ex.risk) : {};
+  k.risk = ex && ex.attended ? clone(ex.risk) : {}; k.r2Auto = false;
   k.teeth = ex && ex.attended ? clone(ex.teeth) : null;
   k.pigi = ex && ex.attended && ex.pigi && Object.keys(ex.pigi).length ? { ...emptyPigi(), ...clone(ex.pigi) } : emptyPigi();
   k.pigiSkip = !!(ex && ex.attended && !(ex.pigi && Object.keys(ex.pigi).length));   // saved as {} = PI/GI not done (R1-14)
@@ -1196,7 +1205,7 @@ async function deleteChild(k) {
 function startExam(k) {
   const u = unit();
   k.editing = true; k.dirty = true;
-  k.teeth = typicalMouth(); k.risk = {}; k.pigi = emptyPigi(); k.pigiAuto = new Set(); k.pigiSkip = false; k.showMiss = false; k.urgent = { pain: false, swell: false, big: false }; k.needOv = {}; k.ovReason = {}; k.flOv = null;
+  k.teeth = typicalMouth(); k.risk = {}; k.r2Auto = false; k.pigi = emptyPigi(); k.pigiAuto = new Set(); k.pigiSkip = false; k.showMiss = false; k.urgent = { pain: false, swell: false, big: false }; k.needOv = {}; k.ovReason = {}; k.flOv = null;
   // The examiner is the chosen "ผู้บันทึก" or nobody: never the first code in the list (R1-02).
   k.examDate = new Date(TODAY); k.examiner = u.examiners.includes(S.prov) ? S.prov : ''; k.place = 'van';
   S.sel = 16;
@@ -1374,6 +1383,7 @@ function renderExam() {
   else if (k.editing) box.append(el('p', { class: 'note', text: 'ผลตรวจใหม่ ตั้งต้นจาก "ช่องปากเด็ก 7 ปีปกติ" แก้เฉพาะซี่ที่ต่าง ตอบแบบประเมินความเสี่ยงให้ครบ 8 ข้อ กรอก PI/GI ให้ครบ (หรือติ๊กว่าไม่ได้ตรวจ) แล้วกด "บันทึกผลตรวจ" ที่แถบด้านล่าง' }));
   if (!needsRisk(k)) { const sc = riskScore(k); box.append(el('p', { class: 'small muted', text: `ความเสี่ยงใช้ผลประเมินครั้งก่อน (ประเมินปีละครั้ง): ${LEVEL[riskLevel(sc)].th} (${sc} คะแนน)` })); }
   setIf('#riskSec', 'hidden', !needsRisk(k));
+  if (!locked) syncR2(k);
   const answered = riskAnswered(k), score = riskScore(k), lvl = riskLevel(score);
   $('#vDate').value = k.examDate ? toInput(k.examDate) : ''; $('#vDate').max = toInput(TODAY);
   $('#vDate').min = k.fu && k.kid.base ? toInput(addDays(k.kid.base, 1)) : '';
@@ -1402,15 +1412,14 @@ function renderExam() {
   for (const q of RISK) {
     if (q.sec) { body.append(el('tr', { class: 'sec' }, el('th', { colspan: '2', scope: 'colgroup', text: q.sec }))); continue; }
     const seg = el('div', { class: 'seg', role: 'group', 'aria-label': q.q });
-    for (const [v, lab, sc] of [['y', 'ใช่', q.y], ['n', 'ไม่ใช่', q.n]]) seg.append(el('button', { type: 'button', 'data-v': v, 'aria-pressed': String(k.risk[q.id] === v), text: `${lab} = ${sc}`, onclick: () => { k.risk[q.id] = v; afterExamChange(); refocus('#riskBody .seg', q.q, `button[data-v="${v}"]`); } }));
-    body.append(el('tr', { class: k.showMiss && !k.risk[q.id] ? 'is-missing' : null }, el('td', { text: q.q }), el('td', { class: 'num' }, seg)));
+    const auto = q.id === 'r2' && k.r2Auto;
+    for (const [v, lab, sc] of [['y', 'ใช่', q.y], ['n', 'ไม่ใช่', q.n]]) seg.append(el('button', { type: 'button', 'data-v': v, 'aria-pressed': String(k.risk[q.id] === v), disabled: auto && v === 'n' ? true : null, text: `${lab} = ${sc}`, onclick: () => { k.risk[q.id] = v; afterExamChange(); refocus('#riskBody .seg', q.q, `button[data-v="${v}"]`); } }));
+    body.append(el('tr', { class: k.showMiss && !k.risk[q.id] ? 'is-missing' : null }, el('td', {}, q.q, auto ? el('div', { class: 'small muted', text: 'ระบบตอบ "ใช่" ให้ตามแผนภูมิฟัน: พบรอยโรคที่กำลังลุกลามหรือรูผุ' }) : null), el('td', { class: 'num' }, seg)));
   }
   $('#riskTotal').textContent = answered === 8 ? score : `– (ตอบ ${answered}/8)`;
   $('#riskChip').replaceChildren(answered === 8 ? el('span', { class: 'chip ' + LEVEL[lvl].chip, text: `${score} คะแนน · ${LEVEL[lvl].th}` }) : el('span', { class: 'chip chip--warn', text: `ตอบแล้ว ${answered}/8 ข้อ` }));
   $$('#riskBand div').forEach(d => d.classList.toggle('on', answered === 8 && d.dataset.l === lvl));
   const rh = $('#riskHint'); rh.replaceChildren();
-  const activeOrCav = POS.some(p => { const t = k.teeth[p]; return t.t !== 'n' && ((t.B >= 1 && t.B <= 4 && t.act === 'a') || t.B >= 5); });
-  if (activeOrCav && k.risk.r2 !== 'y') rh.append(el('div', { class: 'hint', text: 'แผนภูมิฟันพบรอยโรคที่กำลังลุกลามหรือรูผุ แต่ข้อ "พบรอยโรคฟันผุขาวขุ่นระยะลุกลาม" ยังไม่ได้ตอบว่าใช่ โปรดตรวจสอบ' }));
   for (const [id, arr] of [['#archU', UPPER], ['#archL', LOWER]]) $(id).replaceChildren(...arr.map((pos, i) => toothCell(pos, k, i === 6)));
   renderSealRet(k);
   renderEditor();
@@ -1428,7 +1437,7 @@ function refocus(sel, label, inner) {
   const target = box && inner ? box.querySelector(inner) : box;
   if (target) target.focus({ preventScroll: true });
 }
-function afterExamChange() { const k = exK(); k.dirty = true; renderFileHead(); renderExam(); syncSaveBar(); }
+function afterExamChange() { const k = exK(); k.dirty = true; syncR2(k); renderFileHead(); renderExam(); syncSaveBar(); }
 $('#vDate').addEventListener('change', e => { const k = exK(); k.examDate = fromInput(e.target.value); afterExamChange(); });
 $('#vExam').addEventListener('change', e => { const k = exK(); k.examiner = e.target.value; afterExamChange(); });
 $('#vPlace').addEventListener('change', e => { const k = exK(); k.place = e.target.value; afterExamChange(); });
@@ -1438,7 +1447,7 @@ $('#vRound')?.addEventListener('change', e => {
   if (e.target.value === 'recall' && !planRecall(k.kid) && !confirm('นักเรียนคนนี้ไม่มีตรวจซ้ำในแผน (ตรวจติดตามรวมกับตรวจรอบโครงการ 6 และ 12 เดือน)\nบันทึกเป็นตรวจซ้ำนอกแผนหรือไม่')) { e.target.value = k.round; return; }
   const had = needsRisk(k);
   k.round = e.target.value;
-  if (needsRisk(k) !== had) k.risk = needsRisk(k) ? (k.exam && k.exam.round === 'm12' ? clone(k.exam.risk) : {}) : clone(k.prev ? k.prev.risk : {});   // the yearly assessment starts empty
+  if (needsRisk(k) !== had) { k.risk = needsRisk(k) ? (k.exam && k.exam.round === 'm12' ? clone(k.exam.risk) : {}) : clone(k.prev ? k.prev.risk : {}); k.r2Auto = false; }   // the yearly assessment starts empty
   afterExamChange();
 });
 function setPresence(k, pos, v) {
@@ -1656,6 +1665,7 @@ async function saveExam() {
     if (first) { first.scrollIntoView({ block: 'center' }); if (first.tagName !== 'TR') first.focus({ preventScroll: true }); }
     return;
   }
+  syncR2(k);
   const teeth = {};
   for (const pos of POS) {
     const t = k.teeth[pos];

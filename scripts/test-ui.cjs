@@ -150,6 +150,13 @@ let refId = null;
   const occBtns = await until(() => { const groups = d.querySelectorAll('#editor .codes'); return groups.length >= 3 ? groups[2].querySelectorAll('button') : null; });
   click(w, occBtns[3]);
   ok(/ผุ/.test(d.querySelector('#archL').textContent), '"ผุ" badge after ICDAS 3 on 36');
+  // risk item 2 follows the chart (Percy 4 Nov, D-85): an active lesion answers it "yes" and locks "no"
+  const r2Btns = () => [...[...d.querySelectorAll('#riskBody tr:not(.sec)')].find(tr => /ขาวขุ่น/.test(tr.textContent)).querySelectorAll('button')];
+  ok(r2Btns()[0].getAttribute('aria-pressed') === 'true' && r2Btns()[1].disabled && /ระบบตอบ "ใช่" ให้ตามแผนภูมิฟัน/.test(d.querySelector('#riskBody').textContent) && /4 คะแนน · เสี่ยงสูง/.test(d.querySelector('#riskChip').textContent),
+    'an active ICDAS 3 on the chart answers risk item 2 "yes" and locks "no": 1 → 4 points, high risk (D-85)', d.querySelector('#riskChip').textContent);
+  click(w, [...d.querySelectorAll('#editor button')].find(b => /หยุดลุกลาม/.test(b.textContent)));
+  ok(r2Btns()[1].getAttribute('aria-pressed') === 'true' && !r2Btns()[1].disabled && /1 คะแนน · เสี่ยงต่ำ/.test(d.querySelector('#riskChip').textContent),
+    'marked inactive, the examiner\'s own "no" comes back: low risk with an inactive lesion (D-84)', d.querySelector('#riskChip').textContent);
   click(w, d.querySelector('#toothNext'));
   ok(/ตำแหน่ง 16/.test(d.querySelector('#editor h4').textContent), '"ซี่ถัดไป" steps from 36 to 16 (R1-06)', d.querySelector('#editor h4').textContent);
   d.querySelector('#saveExamBtn').click();
@@ -532,7 +539,7 @@ let refId = null;
   console.log('warnings by NHSO fiscal year and the reseal rule (D-77)');
   // Pure check of txFlags on made-up services in a page whose app.js also hands txFlags out; the server pays by the
   // same rules (scripts/test-rls.cjs).
-  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags, fuRows, rowTx, kidFrom, bookletData, teethAt, S, needOf, flFreq, buildPlan, childBudget, kidState, REF_CENTRE };\n})();\n'));
+  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags, fuRows, rowTx, kidFrom, bookletData, teethAt, S, needOf, flFreq, buildPlan, childBudget, kidState, REF_CENTRE, syncR2, riskScore };\n})();\n'));
   const fl = H.w.eval(`(() => {
     const tx = (id, code, date, tooth) => { const [y, m, d] = date.split('-').map(Number); return { id, kid: 'X', code, tooth: tooth || null, date: new Date(y, m - 1, d) }; };
     const run = (arm, list, exams = []) => { const f = __t.txFlags({ arm, byId: {}, exams, tx: list }); return list.map(t => f.get(t.id).join(' ')); };
@@ -627,6 +634,18 @@ let refId = null;
       high13: [fl(kid('high', { 21: { B: 2, act: 'a' } })), fl(kid('high', { 21: { B: 2, act: 'a' } }, 3))],
       zero: [fl(kid('high', {})), fl(kid('vhigh', {})), fl(kLow), fl(kid('vhigh', { 46: { B: 5, act: 'a' } }))],
       lowLesion: fl(kid('low', { 21: { B: 2, act: 'i' } })),
+      lowInactive4: fl(kid('low', { 46: { B: 4, act: 'i' } })),
+      r2: (() => {
+        const k = kid('low', {}), out = [], r2 = () => (k.risk.r2 ?? '-') + (k.r2Auto ? '*' : '');
+        k.risk = { ...k.risk }; __t.syncR2(k); out.push(r2());                          // sound teeth, examiner said no
+        k.teeth[46].B = 5; __t.syncR2(k); out.push(r2(), __t.riskScore(k));            // a cavity: yes, 1 → 4 points
+        k.teeth[46].B = 0; __t.syncR2(k); out.push(r2());                              // gone: the examiner's no is back
+        k.teeth[21] = { ...k.teeth[21], B: 2, act: 'i' }; __t.syncR2(k); out.push(r2()); // inactive ICDAS 2: not forced
+        k.teeth[21].act = 'a'; __t.syncR2(k); out.push(r2());                          // active ICDAS 2: forced
+        delete k.risk.r2; k.r2Auto = false; k.teeth[21].act = 'i'; k.teeth[36].B = 6; __t.syncR2(k); k.teeth[36].B = 0; __t.syncR2(k); out.push(r2()); // never answered: back to unanswered
+        const f = kid('low', { 46: { B: 5, act: 'a' } }); f.fu = true; f.round = 'm6'; __t.syncR2(f); out.push(f.risk.r2);   // 6-month round keeps the previous risk
+        return out;
+      })(),
       wait: [__t.kidState({ ...u, exams: [], txByKid: refTx(null) }, k5).refWait, __t.kidState({ ...u, txByKid: refTx('waiting') }, k5).refWait, __t.kidState({ ...u, txByKid: refTx('no_pulp') }, k5).refWait],
       label: __t.REF_CENTRE,
     };
@@ -646,7 +665,9 @@ let refId = null;
   ok(cr.vhigh13.every(([f, sel]) => f === 3 && !sel), 'very high risk with ICDAS 1–3: every 3 months', JSON.stringify(cr.vhigh13));
   ok(cr.high13[0][0] === 6 && cr.high13[0][1] && cr.high13[1][0] === 3, 'high risk with ICDAS 1–3 only: the examiner chooses 3 or 6 months (default 6)', JSON.stringify(cr.high13));
   ok(cr.zero[0][0] === 6 && cr.zero[1][0] === 6 && cr.zero[2][0] === 0 && cr.zero[3][0] === 3, 'all teeth ICDAS 0: high and very high every 6 months, low risk none; very high with ICDAS 5: every 3', JSON.stringify(cr.zero));
-  ok(cr.lowLesion[0] === 6, 'low risk with an inactive lesion keeps every 6 months (open, WS2-3 point 2)', JSON.stringify(cr.lowLesion));
+  ok(cr.lowLesion[0] === 6 && cr.lowInactive4[0] === 6, 'low risk with only inactive lesions (ICDAS 1–4): fluoride every 6 months (Percy 4 Nov, D-84)', JSON.stringify([cr.lowLesion, cr.lowInactive4]));
+  ok(JSON.stringify(cr.r2) === JSON.stringify(['n', 'y*', 4, 'n', 'n', 'y*', '-', 'n']),
+    'risk item 2 follows the chart: a cavity or an active lesion forces "yes"; inactive lesions do not; the earlier answer (or none) comes back; the 6-month round is left alone (D-85)', JSON.stringify(cr.r2));
   ok(cr.wait[0] && cr.wait[1] && !cr.wait[2], 'a referral waits for its result until one is recorded ("ยังไม่ไปพบทันตแพทย์" still waits)', JSON.stringify(cr.wait));
 
 
