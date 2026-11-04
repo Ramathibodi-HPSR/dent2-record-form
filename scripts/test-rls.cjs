@@ -1,6 +1,6 @@
 // API test of the record form against the TEST project: logins, row-level security, enrolment without personal
 // data (D-64), health coverage (D-68), exams, services and the claims cycle (D-65), what the project pays by fee
-// schedule (v1.1), cohort and deleting a child, transfers with slips, views, audit.
+// schedule (v1.1), cohort and deleting a child, transfers with slips, views, audit; v1.4: the referral result (D-80).
 // Run: NODE_PATH=<dir with @supabase/supabase-js> node scripts/test-rls.cjs
 // Uses the test accounts in scripts/test-accounts.local.json (never real staff). Leaves its test children in place.
 const fs = require('fs');
@@ -12,7 +12,7 @@ const URL = cfgText.match(/url:\s*'([^']+)'/)[1];
 const KEY = cfgText.match(/anonKey:\s*'([^']+)'/)[1];
 const ACCTS = Object.fromEntries(JSON.parse(fs.readFileSync(path.join(__dirname, 'test-accounts.local.json'), 'utf8')).map(a => [a.username, a]));
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skip = 0;
 const ok = (cond, label, extra) => { if (cond) { pass++; console.log('  ✓', label); } else { fail++; console.log('  ✗', label, extra ?? ''); } };
 const client = () => createClient(URL, KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 async function login(user) {
@@ -71,7 +71,7 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   ok(!!wrongSchool.error, "cannot enrol into another unit's school");
 
   const exam = { study_id: kid1, unit_id: 'public-cap', round: 'baseline', exam_date: '2026-10-31', place: 'van', examiner_code: 'TEST-B1', attended: true,
-    risk: RISK_HIGH, teeth: mouth({ 36: { B: 3, occ: 3, act: 'a', need: 2 }, 14: { B: 5, act: 'a', need: 4 }, 26: { partial: true } }), pigi: PIGI, urgent: { pain: false, swell: false, big: false } };
+    risk: RISK_HIGH, teeth: mouth({ 36: { B: 3, occ: 3, act: 'a', need: 2 }, 14: { B: 5, act: 'a', need: 8 }, 26: { partial: true } }), pigi: PIGI, urgent: { pain: false, swell: false, big: false } };
   const x1 = await B.from('exams').insert(exam).select().single();
   ok(!x1.error, 'baseline exam saved', x1.error && x1.error.message);
   const x2 = await B.from('exams').insert({ ...exam, study_id: kid2 }).select().single();
@@ -284,6 +284,39 @@ const consented = { class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', consent_on:
   const evDel = await C.from('evidence').delete().eq('id', evRow.data.id).select();
   ok(!evRm.error && !evDel.error && evDel.data.length === 1, 'the unit removes a file uploaded by mistake');
 
-  console.log(`\n${pass} passed, ${fail} failed · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kc2}, ${kc3}, ${kaU}, ${kaN}`);
+  console.log('referral result (D-80, v1.4)');
+  // set_referral() and v_referrals come with migration 20261104000100_referral_d80; until it is applied these checks
+  // are skipped and counted as skipped.
+  const rfProbe = await C.rpc('set_referral', { p_id: -1, p_status: 'waiting', p_date: null, p_note: null });
+  if (rfProbe.error && (rfProbe.error.code === 'PGRST202' || /Could not find the function/.test(rfProbe.error.message))) {
+    skip += 7; console.log('  – SKIPPED 7 checks: set_referral is not in the database yet (migration referral_d80 not applied)');
+  } else {
+    const rf = await C.from('services').insert({ unit_id: 'public-ffs', study_id: kc.data, code: 'REF', tooth: 46, service_date: '2026-11-02', plan_key: 'tx-46', status: 'draft' }).select().single();
+    const rfSent = await C.from('services').update({ status: 'submitted' }).eq('id', rf.data.id).select();
+    const rf1 = await C.rpc('set_referral', { p_id: rf.data.id, p_status: 'no_pulp', p_date: '2026-11-03', p_note: ' ทดสอบ test-rls ' });
+    ok(!rf.error && !rfSent.error && !rf1.error && rf1.data.ref_status === 'no_pulp' && rf1.data.ref_date === '2026-11-03' && rf1.data.outcome === 'ทดสอบ test-rls' && rf1.data.status === 'submitted',
+      'the unit records the result of a referral it already sent: seen, pulp not involved, with the date and a note', JSON.stringify((rf1.error || rf.error || rf1.data)));
+    const rfDirect = await C.from('services').update({ ref_status: 'treated' }).eq('id', rf.data.id).select();
+    ok(rfDirect.error || rfDirect.data.length === 0, 'a sent row still cannot be changed directly, only through set_referral');
+    const rfB = await B.rpc('set_referral', { p_id: rf.data.id, p_status: 'treated', p_date: '2026-11-03', p_note: null });
+    const rfNotRef = await C.rpc('set_referral', { p_id: ids[1], p_status: 'treated', p_date: '2026-11-03', p_note: null });
+    ok(!!rfB.error && !!rfNotRef.error, "another unit cannot record C's referral, and a service that is not REF takes no result");
+    const rfNoDate = await C.rpc('set_referral', { p_id: rf.data.id, p_status: 'pulp', p_date: null, p_note: null });
+    const rfLater = await C.rpc('set_referral', { p_id: rf.data.id, p_status: 'pulp', p_date: '2099-01-01', p_note: null });
+    ok(!!rfNoDate.error && !!rfLater.error, 'a seen or treated result needs a date, not in the future');
+    const rfBack = await C.rpc('set_referral', { p_id: rf.data.id, p_status: 'waiting', p_date: '2026-11-03', p_note: null });
+    ok(!rfBack.error && rfBack.data.ref_status === 'waiting' && rfBack.data.ref_date === null && rfBack.data.outcome === null, 'back to "not seen yet" clears the date and the note');
+    const rfR = await RS.rpc('set_referral', { p_id: rf.data.id, p_status: 'treated', p_date: '2026-11-04', p_note: null });
+    ok(!rfR.error && rfR.data.ref_status === 'treated', 'the research team can correct a result', rfR.error && rfR.error.message);
+    const vrC = await C.from('v_referrals').select('*').eq('id', rf.data.id);
+    const vrB = await B.from('v_referrals').select('*').eq('id', rf.data.id);
+    ok(!vrC.error && vrC.data.length === 1 && vrC.data[0].ref_status === 'treated' && vrC.data[0].referred_on === '2026-11-02' && vrB.data.length === 0,
+      'v_referrals (CSV) shows the referral and its result to the unit, not to another unit', JSON.stringify(vrC.error || vrC.data));
+    // leave no sent REF row behind: research turns it back into a draft and the unit deletes it (the audit log keeps it)
+    await RS.from('services').update({ status: 'draft' }).eq('id', rf.data.id);
+    await C.from('services').delete().eq('id', rf.data.id);
+  }
+
+  console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''} · test children ${kid1}, ${kid2}, ${kidN}, ${kc.data}, ${kcN}, ${kc2}, ${kc3}, ${kaU}, ${kaN}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });

@@ -33,6 +33,9 @@
     8: ['urg', 'ส่งต่อพบทันตแพทย์'],
   };
   const SOON = [5, 8];
+  // ICDAS 5 stays a filling (4) and is also referred to the centre's dentist (D-80, Percy 4 Nov), so it shows under both.
+  const centreRef = t => t.need === 4 && t.B >= 5;
+  const isSoon = t => SOON.includes(t.need) || centreRef(t);
   // Clinical wording to be confirmed by the dental team (review R1 M4 and polish).
   const GLOSS = {
     2: 'กันฟันผุที่ร่องฟันกราม',
@@ -45,6 +48,7 @@
     [/^ทา SDF 38%/, 'ทายาหยุดฟันผุ (SDF)'],
     [/^ส่งต่อ อาการเร่งด่วน/, 'ส่งต่อพบทันตแพทย์ (อาการเร่งด่วน)'],
     [/^ส่งต่อ รักษาโพรงประสาทฟัน/, 'ส่งต่อรักษาโพรงประสาทฟัน'],
+    [/^ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่/, 'ส่งต่อพบทันตแพทย์ที่ศูนย์บริการ ตรวจว่าฟันผุถึงประสาทฟันหรือไม่'],
     [/^ส่งต่อ(?=\s*ซี่|\s*$)/, 'ส่งต่อพบทันตแพทย์'],
     [/^ฝึกแปรงฟัน \+ อุปกรณ์/, 'ฝึกแปรงฟันและรับอุปกรณ์แปรงฟัน'],
     [/^ตรวจรอบโครงการ(?:\s*\(เก็บข้อมูล\))?$/, 'ตรวจฟันติดตาม'],
@@ -296,7 +300,7 @@
       levelLabel: level ? (cleanText(risk.label) || LEVELS[level].th) : '',
       // Urgent box: urgent signs and teeth needing pulp treatment or referral only (not exam.needs_referral).
       urgent: { pain: !!urgent.pain, swell: !!urgent.swell, big: !!urgent.big },
-      soonTeeth: teeth.filter(t => live(t) && SOON.includes(t.need)),
+      soonTeeth: teeth.filter(t => live(t) && isSoon(t)),
       teeth,
       plan,
       tl: timeline(plan),
@@ -546,7 +550,7 @@
     const todo = h('div', { class: 'todo' }, h('h3', { text: 'สิ่งที่ต้องทำ' }));
     let nTodo = 0;
     for (const n of NEED_ORDER) {
-      const list = M.teeth.filter(t => live(t) && t.need === n);
+      const list = M.teeth.filter(t => live(t) && (t.need === n || (n === 8 && centreRef(t))));
       if (!list.length) continue;
       nTodo++;
       todo.append(srow(markIcon(NEED_PLAIN[n][0]), NEED_PLAIN[n][1], list, GLOSS[n] ? { gloss: GLOSS[n], glossCls: n === 3 ? 'keep' : '' } : null));

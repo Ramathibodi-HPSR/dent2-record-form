@@ -83,6 +83,11 @@ const CODE_A = { 0: 'ไม่มีวัสดุอุดหรือเค�
 const CODE_N = { 99: 'ฟันยังไม่ขึ้น', 97: 'ฟันหายเพราะฟันผุ', 98: 'ฟันหายสาเหตุอื่น', 96: 'ประเมินไม่ได้' };
 const CODE_B = { 0: 'ผิวฟันปกติ', 1: 'เปลี่ยนแปลงแรก เห็นเมื่อเป่าแห้ง', 2: 'เปลี่ยนแปลงชัดขณะเปียก', 3: 'ผิวเคลือบฟันแตกเฉพาะที่', 4: 'เงาเข้มของเนื้อฟันใต้ผิวเคลือบ', 5: 'รูผุเห็นเนื้อฟัน น้อยกว่าครึ่งด้าน', 6: 'รูผุใหญ่ มากกว่าครึ่งด้าน' };
 const NEED = { 0: 'ไม่ต้องรักษา', 1: 'ฟลูออไรด์โดยทันตบุคลากร', 2: 'เคลือบหลุมร่องฟัน', 3: 'SDF 38%', 4: 'บูรณะฟัน', 5: 'รักษาโพรงประสาทฟัน', 6: 'ครอบฟัน', 7: 'ถอนฟัน', 8: 'ส่งต่อ' };
+// Referral of an ICDAS 5–6 tooth (D-80) and its result on the REF service (ref_status; empty = not recorded yet).
+const REF_CENTRE = 'ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่';
+const REF_ST = { waiting: 'ยังไม่ไปพบทันตแพทย์', no_pulp: 'พบแล้ว ไม่ถึงโพรงประสาทฟัน', pulp: 'พบแล้ว ถึงโพรงประสาทฟัน', treated: 'รักษาแล้ว' };
+const refWaiting = t => t.code === 'REF' && (!t.refStatus || t.refStatus === 'waiting');
+const refText = t => ({ waiting: 'รอผล', no_pulp: 'ไม่ถึงโพรงประสาท', pulp: 'ถึงโพรงประสาท', treated: 'รักษาแล้ว' })[t.refStatus || 'waiting'];
 const RISK = [
   { sec: 'สภาวะสุขภาพ' },
   { id: 'r1', q: 'มีภาวะที่ทำให้การทำความสะอาดช่องปากมีประสิทธิภาพลดลง หรือน้ำลายน้อย', y: 1, n: 0 },
@@ -149,22 +154,33 @@ function riskScore(k) { let s = 0; for (const q of RISK) if (q.id) s += k.risk[q
 const riskLevel = s => (s <= 2 ? 'low' : s <= 5 ? 'high' : 'vhigh');
 const lvlOf = k => riskLevel(riskScore(k));
 const riskAnswered = k => RISK_IDS.filter(id => k.risk[id] === 'y' || k.risk[id] === 'n').length;
+// Treatment need from the final form's table (D-37). ICDAS 5–6, primary teeth too and whatever Code A says: refer to the
+// centre's dentist to confirm whether the pulp is involved, before treatment (D-80). ICDAS 5 stays a filling (4), counted
+// in the round-1 filling budget (D-60), with the referral row beside it; ICDAS 6 is a referral (8) (Percy 4 Nov 16:30).
+// ICDAS 4: SDF or restoration. Every erupted first permanent molar is sealed whatever the risk (D-09, D-79).
 function suggestNeed(pos, t, lvl) {
   if (t.t === 'n') return null;
   const fpm = t.t === 'p' && FPM.includes(pos);
+  if (t.B >= 6) return 8;
+  if (t.B === 5) return 4;
   if (t.A === 1 || t.A === 7) return fpm ? 2 : 4;
-  if (t.B >= 6) return t.t === 'd' ? 5 : 8;
   if (t.B >= 4) return 4;
   if (t.B === 3) return fpm ? 2 : (lvl === 'low' ? 0 : 1);
   if (fpm && t.A === 0) return 2;
   return lvl === 'low' ? 0 : 1;
 }
 function needOf(pos, k) { const ov = k.needOv[pos]; return ov != null ? ov : suggestNeed(pos, k.teeth[pos], lvlOf(k)); }
-// Fluoride interval from the final form: ICDAS 0 -> high/very high every 6 months; ICDAS 1-3 -> high 3-6, very high 3.
+// A tooth the plan refers: need 5–8, or ICDAS 5–6 kept as a filling (D-80).
+const refers = (pos, k) => { const n = needOf(pos, k); return n != null && (n >= 5 || (n === 4 && k.teeth[pos].B >= 5)); };
+// Fluoride interval from the final form's table (D-81): high/very high every 6 months when every tooth is ICDAS 0;
+// ICDAS 1-3: high every 3-6 months (the examiner chooses), very high every 3; any tooth ICDAS 4-6: every 3 months.
+// Low risk with a lesion is still open (WS2-3 point 2) and keeps every 6 months. Fixed once the cohort is sent (D-78).
 function flFreq(k) {
   const lvl = lvlOf(k);
-  const lesion = POS.some(p => k.teeth[p].t !== 'n' && k.teeth[p].B >= 1);
+  const live = POS.filter(p => k.teeth[p].t !== 'n');
+  const lesion = live.some(p => k.teeth[p].B >= 1), deep = live.some(p => k.teeth[p].B >= 4);
   if (lvl === 'low') return { f: lesion ? 6 : 0, why: lesion ? 'เสี่ยงต่ำ มีรอยโรคเริ่มต้นที่หยุดลุกลาม' : '' };
+  if (deep) return { f: 3, why: `${LEVEL[lvl].th} + ฟันผุ ICDAS 4–6` };
   if (lvl === 'high') return { f: lesion ? (k.flOv || 6) : 6, why: lesion ? 'เสี่ยงสูง + รอยโรคเริ่มต้น (แบบฟอร์ม: ทุก 3–6 เดือน)' : 'เสี่ยงสูง ฟันปกติ', sel: lesion };
   return { f: lesion ? 3 : 6, why: lesion ? 'เสี่ยงสูงมาก + รอยโรคเริ่มต้น' : 'เสี่ยงสูงมาก ฟันปกติ' };
 }
@@ -188,13 +204,16 @@ function buildPlan(k) {
     const no = toothNo(pos, t), prim = t.t === 'd', fpm = FPM.includes(pos) && t.t === 'p';
     const base = { tooth: no, anytime: true, prim };
     const primNote = prim ? ' · ฟันน้ำนม ไม่นับในงบโครงการ' : '';
+    // The centre's dentist confirms whether the pulp is involved; the unit records whether the child went (D-80).
+    const centre = { ...base, code: 'REF', codes: ['REF'], label: REF_CENTRE, sub: `ICDAS ${t.B} · ติ๊กเมื่อส่งต่อ แล้วบันทึกผลว่านักเรียนไปพบทันตแพทย์หรือยัง (แท็บ "บริการที่บันทึก")` + primNote, urgent: true };
+    if (n === 4 && t.B >= 5) teethRows.push({ ...centre, key: `ref-${no}` });
     if (n === 2 && fpm) {
       const occ = t.occ ?? t.B;
       // PRR only at ICDAS 3; ICDAS 4 and above are filled (D-52).
       teethRows.push({ ...base, key: `seal-${no}`, code: '171', codes: occ === 3 ? ['171', '172'] : ['171'], label: 'เคลือบหลุมร่องฟัน', sub: (t.A === 1 || t.A === 7 ? 'เคลือบซ้ำ · ' : '') + (occ >= 1 ? `ICDAS ${occ} ด้านบดเคี้ยว` : 'ฟันกรามแท้ขึ้นแล้ว') + (t.partial ? ' · ขึ้นไม่เต็มซี่' : '') + (occ === 3 ? ' · หรือ PRR' : '') });
     } else if (n === 4) {
       // One filling code and price, 1 surface (D-69); more than one surface goes to the centre.
-      teethRows.push({ ...base, key: `tx-${no}`, code: '67210', codes: ['67210', '55', '56', '57', 'SDF'], label: 'อุดฟัน', sub: `ICDAS ${t.B ?? '-'}` + (prim ? '' : ' · อุด 1 ด้านบนรถทันตกรรม ถ้าต้องอุดมากกว่า 1 ด้าน ส่งรักษาที่ศูนย์ฯ') + ' · หรือ SDF 38%' + primNote });
+      teethRows.push({ ...base, key: `tx-${no}`, code: '67210', codes: ['67210', '55', '56', '57', 'SDF'], label: 'อุดฟัน', sub: `ICDAS ${t.B ?? '-'}` + (t.B >= 5 ? ' · อุดเมื่อทันตแพทย์ที่ศูนย์ยืนยันว่าไม่ถึงโพรงประสาทฟัน' : '') + (prim ? '' : ' · อุด 1 ด้านบนรถทันตกรรม ถ้าต้องอุดมากกว่า 1 ด้าน ส่งรักษาที่ศูนย์ฯ') + ' · หรือ SDF 38%' + primNote });
     } else if (n === 3) {
       teethRows.push({ ...base, key: `tx-${no}`, code: 'SDF', codes: ['SDF', '67210', '55', '56', '57'], label: 'ทา SDF 38%', sub: `ICDAS ${t.B} · ยังไม่มีราคา` + primNote });
     } else if (n === 5) {
@@ -203,6 +222,8 @@ function buildPlan(k) {
       teethRows.push({ ...base, key: `tx-${no}`, code: prim ? '178' : 'REF', codes: ['178', 'REF'], label: 'ครอบฟัน', sub: (prim ? 'SSC หรือส่งต่อ' : 'ส่งต่อ') + primNote });
     } else if (n === 7) {
       teethRows.push({ ...base, key: `tx-${no}`, code: '1', codes: ['1', 'REF'], label: 'ถอนฟัน', sub: `ICDAS ${t.B ?? '-'}` + primNote });
+    } else if (n === 8 && t.B >= 5) {
+      teethRows.push({ ...centre, key: `tx-${no}` });
     } else if (n === 8) {
       teethRows.push({ ...base, key: `tx-${no}`, code: 'REF', codes: ['REF'], label: 'ส่งต่อ', sub: 'ทันตแพทย์เฉพาะทาง / โรงพยาบาล · นอกงบโครงการ', urgent: true });
     }
@@ -385,7 +406,7 @@ function kidState(u, k) {
     const txs = rowTx(u, k, row);
     if (row.anytime) {
       total++;
-      if (txs.length) { done++; if (txs.some(t => t.code === 'REF' && !t.outcome)) { refWait = true; cats.add('ref'); } }
+      if (txs.length) { done++; if (txs.some(refWaiting)) { refWait = true; cats.add('ref'); } }
       else { const late = (TODAY - (row.from || k.base)) / 864e5 > 30; (late ? miss : due).push({ c: catOf(row), t: chipText(row) }); cats.add(catOf(row)); }
       continue;
     }
@@ -447,7 +468,8 @@ const txAmt = (u, tx) => (u.arm !== 'cap' && payOf(tx) ? payOf(tx).pay : refValu
 const amtLabel = u => (u.arm === 'cap' ? 'มูลค่าตามอัตรา' : 'ยอดเบิกโครงการ');
 function txFrom(s) {
   return { id: s.id, kid: s.study_id, code: s.code, tooth: s.tooth, date: fromInput(s.service_date), status: s.status, fromPlan: s.from_plan,
-    planKey: s.plan_key, planMonth: s.plan_month ?? null, by: s.provider || '', outcome: s.outcome, gid: s.group_id, gnote: s.group_note, n: s.n_participants, note: s.note, returnNote: s.return_note };
+    planKey: s.plan_key, planMonth: s.plan_month ?? null, by: s.provider || '', outcome: s.outcome, refStatus: s.ref_status || null, refDate: fromInput(s.ref_date),
+    gid: s.group_id, gnote: s.group_note, n: s.n_participants, note: s.note, returnNote: s.return_note };
 }
 const clone = o => JSON.parse(JSON.stringify(o || {}));
 function applyExam(k, ex) {
@@ -598,11 +620,11 @@ async function afterLogin() {
     ps.classList.toggle('is-missing', !S.prov);
     $('#provBox').hidden = false;
     S.kid = null;   // the file tab waits for a chosen child (R1-19)
-    $('#verTag').textContent = u.is_test ? 'v1.3 · หน่วยทดสอบ' : 'v1.3';
+    $('#verTag').textContent = u.is_test ? 'v1.4 · หน่วยทดสอบ' : 'v1.4';
   } else {
     fill(chip, el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
     $('#provBox').hidden = true;
-    $('#verTag').textContent = 'v1.3';
+    $('#verTag').textContent = 'v1.4';
   }
   $('#acctBox').hidden = false;
   show(S.me.role === 'unit' ? 'home' : 'research');
@@ -622,7 +644,7 @@ async function logout(reason) {
   await sb.auth.signOut();
   Object.assign(S, { me: null, units: {}, acct: null, kid: null, fu: null, editId: null, prov: '' });
   $('#tabs').hidden = true; $('#acctBox').hidden = true; hideSaveBar();
-  $('#verTag').textContent = 'v1.3';
+  $('#verTag').textContent = 'v1.4';
   show('login');
   if (reason) $('#lgMsg').replaceChildren(el('div', { class: 'hint', text: reason }));
 }
@@ -726,6 +748,7 @@ const EXPORTS = [
   ['v_tooth_findings', 'ผลตรวจรายซี่', ['study_id', 'position']],
   ['v_services_priced', 'บริการที่บันทึก', ['service_date', 'id']],
   ['v_services_pay', 'ยอดเบิกรายบริการ', ['service_date', 'id']],
+  ['v_referrals', 'การส่งต่อและผล', ['referred_on', 'id']],
 ];
 async function exportCsv(view, label, order, btn) {
   btn.disabled = true;
@@ -845,7 +868,7 @@ function cohortSection(u) {
       u.cohort_submitted_at = data; toast('ส่ง cohort แล้ว'); renderHome();
     } }));
 }
-function needsReferral(k) { return examined(k) && (Object.values(k.urgent).some(Boolean) || POS.some(p => { const n = needOf(p, k); return n != null && n >= 5; })); }
+function needsReferral(k) { return examined(k) && (Object.values(k.urgent).some(Boolean) || POS.some(p => refers(p, k))); }
 function renderHome() {
   const u = unit();
   const all = u.kids.map(k => ({ k, st: kidState(u, k) }));
@@ -855,6 +878,8 @@ function renderHome() {
   const noConsent = u.kids.filter(k => !hasConsent(k)).length;
   const miss = all.filter(x => x.st.miss.length).length, due = all.filter(x => x.st.due.length).length;
   const ref = u.kids.filter(needsReferral).length;
+  // Referrals not ticked yet, and ticked but the child has not seen the dentist yet (D-80).
+  const refTodo = all.filter(x => [...x.st.miss, ...x.st.due].some(i => i.c === 'ref')).length, refWait = all.filter(x => x.st.refWait).length;
   const schoolNames = u.schools.map(s => s.name).join(', ');
   $('#home').replaceChildren(
     transferBanner(u) || '',
@@ -868,7 +893,7 @@ function renderHome() {
         tile('ลงทะเบียน', `${n} คน`, noConsent ? `ยังไม่มีความยินยอมครบ ${noConsent} คน` : 'มีความยินยอมครบทุกคน'),
         tileLink('ตรวจครั้งแรกแล้ว', `${ex}/${n}`, absent ? `ขาดเรียนวันตรวจ ${absent} คน` : '', 'absent', 'ดูคนที่ยังไม่ได้ตรวจ →'),
         tile('ความเสี่ยง', `${lv.vhigh} · ${lv.high} · ${lv.low}`, 'สูงมาก · สูง · ต่ำ'),
-        tileLink('ต้องส่งต่อหรือรักษาโพรงประสาท', `${ref} คน`, '', 'refneed'),
+        tileLink('ต้องส่งต่อหรือรักษาโพรงประสาท', `${ref} คน`, refTodo || refWait ? `ยังไม่ส่ง ${refTodo} คน · ส่งแล้ว รอผล ${refWait} คน` : '', 'refneed'),
         tileLink('ขาดบริการตามแผน', `${miss} คน`, 'เลยกำหนดแล้วยังไม่ได้รับ', 'miss'),
         tileLink('ถึงกำหนดเดือนนี้', `${due} คน`, '', 'due')),
       el('div', { class: 'row' },
@@ -1356,10 +1381,10 @@ function renderExam() {
   $('#vPlace').value = k.place || 'van';
   for (const b of $$('#urgent input')) b.checked = !!k.urgent[b.dataset.u];
   const urg = Object.values(k.urgent).some(Boolean);
-  const refTeeth = POS.filter(p => { const n = needOf(p, k); return n != null && n >= 5; }).map(p => toothNo(p, k.teeth[p]));
+  const refTeeth = POS.filter(p => refers(p, k)).map(p => toothNo(p, k.teeth[p]));
   const um = $('#urgentMsg'); um.replaceChildren();
   if (urg) um.append(el('div', { class: 'alert', text: '⛔ ต้องได้รับการรักษาเร่งด่วน ระบบเพิ่มรายการส่งต่อในแผน ไม่ใช้ฟลูออไรด์หรือ SDF เป็นการรักษาเดียว' }));
-  else if (refTeeth.length) um.append(el('div', { class: 'hint', text: `ฟัน ${refTeeth.join(', ')} ต้องประเมินโพรงประสาทฟัน ระบบเพิ่มรายการในแผน (ทำในหน่วยหรือส่งต่อ)` }));
+  else if (refTeeth.length) um.append(el('div', { class: 'hint', text: `ฟัน ${refTeeth.join(', ')} ต้องส่งต่อหรือรักษา ระบบเพิ่มรายการในแผน · ICDAS 5–6 ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่ (ICDAS 5 นับเป็นฟันที่ต้องอุดด้วย)` }));
   const body = $('#riskBody'); body.replaceChildren();
   for (const q of RISK) {
     if (q.sec) { body.append(el('tr', { class: 'sec' }, el('th', { colspan: '2', scope: 'colgroup', text: q.sec }))); continue; }
@@ -1424,7 +1449,7 @@ function toothCell(pos, k, mid) {
     codes = `${t.A}${t.A === 7 && t.lost ? t.lost : ''}·${t.B}`; need = n == null ? '' : String(n);
     if (t.B >= 5) cls += ' sev-high'; else if (t.B >= 3) cls += ' sev-mid'; else if (t.B >= 1) cls += ' sev-low';
     else if (t.A === 1 || t.A === 2) cls += ' is-sealed'; else if (t.A >= 3 && t.A <= 8) cls += ' is-restored';
-    if (n >= 5) cls += ' need-ref';
+    if (refers(pos, k)) cls += ' need-ref';
     if (t.B >= 3) decay = el('span', { class: 'decay', 'aria-hidden': 'true', text: 'ผุ' });
     label = `ซี่ ${toothNo(pos, t)} ${t.t === 'd' ? 'ฟันน้ำนม' : 'ฟันแท้'} Code A ${t.A} ICDAS ${t.B}${t.B >= 3 ? ' ผุ' : ' ไม่ผุ'} ความต้องการ ${NEED[n]}`;
   }
@@ -1805,7 +1830,8 @@ function anyCell(k, row, txs) {
   return el('span', { class: 'anycell' },
     el('button', { type: 'button', class: 'cellbtn' + (t ? ' is-done' : late ? ' is-late' : ' is-due'), 'aria-pressed': String(!!t), 'aria-label': `${rowName(row)} ${t ? 'ทำแล้ว' : late ? 'ค้าง' : 'ยังไม่ทำ'}`,
       title: t ? `${pname(t.code)} · ${thDate(t.date)} · ${STATUS[t.status].th}` : `ติ๊กเมื่อให้บริการ ระบบ${u.arm === 'cap' ? 'บันทึกผลงาน' : 'สร้างรายการบริการ (ร่าง)'}ให้`, onclick: () => toggleCell(k, row, 'any', t) }, t ? '✓' : late ? '!' : ''),
-    t ? el('small', { text: thShort(t.date) + (t.code !== row.code ? ` · ${pshort(t.code)}` : '') + (t.code === 'REF' && !t.outcome ? ' · รอผล' : '') }) : null);
+    t ? el('small', { text: thShort(t.date) + (t.code !== row.code ? ` · ${pshort(t.code)}` : '') + (t.code === 'REF' ? ` · ${refText(t)}` : '') }) : null,
+    t && t.code === 'REF' && S.me.role === 'unit' ? el('button', { class: 'linkbtn tiny noprint', type: 'button', text: refWaiting(t) ? 'บันทึกผล' : 'แก้ผล', onclick: () => { S.refEdit = t.id; S.ftab = 'tx'; renderFile(); } }) : null);
 }
 function renderPlanGrid() {
   const u = unit(), k = curKid();
@@ -1920,7 +1946,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty || exK().dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.3.1', '_blank');
+  const w = window.open('booklet.html?v=1.4.0', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 
@@ -1948,13 +1974,34 @@ function planMatch(k, tx) {
   const m = txMonth(k, tx);
   return buildPlan(k).find(r => !r.study && r.codes.includes(tx.code) && (r.tooth == null || r.tooth === tx.tooth) && (!r.from || tx.date >= r.from) && (!r.to || tx.date < r.to) && (r.anytime || r.months.includes(m))) || null;
 }
-async function saveOutcome(tx) {
-  const v = prompt('ผลการส่งต่อ (เช่น รักษาแล้วที่โรงพยาบาล / ยังไม่ไปตามนัด) ห้ามใส่ชื่อ', tx.outcome || '');
-  if (v == null) return;
-  const { error } = await sb.from('services').update({ outcome: v.trim() || null }).eq('id', tx.id);
+// Result of a referral (D-80): whether the child saw the centre's dentist, what the dentist found and when, and a
+// free-text note. set_referral() records it even after the REF row was sent with the month's claims.
+function refCell(tx) {
+  const head = el('div', { class: 'tiny' }, `ผล: ${REF_ST[tx.refStatus || 'waiting']}${tx.refDate ? ' ' + thShort(tx.refDate) : ''}${tx.outcome ? ` · ${tx.outcome}` : ''} `);
+  if (S.me.role !== 'unit') return head;
+  if (S.refEdit !== tx.id) { head.append(el('button', { class: 'linkbtn', type: 'button', text: refWaiting(tx) ? 'บันทึกผล' : 'แก้ผล', onclick: () => { S.refEdit = tx.id; renderKidTx(); } })); return head; }
+  const st = el('select', { 'aria-label': 'ผลการส่งต่อ' }, ...Object.entries(REF_ST).map(([v, lab]) => el('option', { value: v, text: lab })));
+  st.value = tx.refStatus || 'waiting';
+  const dt = el('input', { type: 'date', 'aria-label': 'วันที่ไปพบทันตแพทย์', max: toInput(TODAY), value: tx.refDate ? toInput(tx.refDate) : '' });
+  const note = el('input', { type: 'text', 'aria-label': 'หมายเหตุผลส่งต่อ', maxlength: '200', placeholder: 'ห้ามใส่ชื่อ', value: tx.outcome || '' });
+  const dateBox = el('label', { class: 'field' }, 'วันที่ไปพบทันตแพทย์', dt);
+  const sync = () => { dateBox.hidden = st.value === 'waiting'; };
+  st.addEventListener('change', sync); dt.addEventListener('input', () => beHint(dt)); sync();
+  return el('div', { class: 'stack', style: 'gap:6px;margin-top:6px;min-width:15rem' },
+    el('label', { class: 'field' }, 'ผลการส่งต่อ', st), dateBox, el('label', { class: 'field' }, 'หมายเหตุ', note),
+    el('div', { class: 'row', style: 'gap:6px' },
+      el('button', { class: 'btn btn--primary', type: 'button', text: 'บันทึกผล', onclick: () => saveReferral(tx, st.value, dt.value, note.value) }),
+      el('button', { class: 'btn', type: 'button', text: 'ยกเลิก', onclick: () => { S.refEdit = null; renderKidTx(); } })));
+}
+async function saveReferral(tx, status, date, note) {
+  const seen = status !== 'waiting';
+  const dp = seen ? (date ? dateProblem(date, 'วันที่ไปพบทันตแพทย์') : 'ใส่วันที่นักเรียนไปพบทันตแพทย์') : '';
+  if (dp) { toast(dp); return; }
+  const { data, error } = await sb.rpc('set_referral', { p_id: tx.id, p_status: status, p_date: seen ? date : null, p_note: note.trim() || null });
   if (error) { toastErr(error); return; }
-  tx.outcome = v.trim() || null;
-  toast('บันทึกผลส่งต่อแล้ว');
+  Object.assign(tx, { refStatus: data.ref_status || null, refDate: fromInput(data.ref_date), outcome: data.outcome });
+  S.refEdit = null;
+  toast(`บันทึกผลส่งต่อแล้ว · ${REF_ST[status]}`);
   renderFileHead(); renderKidTx();
 }
 function renderKidTx() {
@@ -1972,10 +2019,10 @@ function renderKidTx() {
       el('td', { class: 'mono', text: tx.tooth ? String(tx.tooth) : '–' }),
       el('td', {}, pm ? el('span', { class: 'chip chip--ok', text: pm.anytime ? 'ตามแผน' : `ตามแผน ด.${txMonth(k, tx)}` }) : el('span', { class: 'chip chip--plain', text: 'นอกแผน' })),
       el('td', { class: 'num' + (v ? '' : ' amt-0') }, fmt2(v), payNote(u, tx)),
-      el('td', {}, statusEl(tx), tx.code === 'REF' ? el('div', { class: 'tiny' }, tx.outcome ? `ผล: ${tx.outcome}` : 'รอผลส่งต่อ ',
-        canEdit(tx) ? el('button', { class: 'linkbtn', type: 'button', text: tx.outcome ? 'แก้ผล' : 'บันทึกผล', onclick: () => saveOutcome(tx) }) : null) : null),
+      el('td', {}, statusEl(tx), tx.code === 'REF' ? refCell(tx) : null),
       el('td', { text: tx.by || '–' })));
   }
+  if (S.refEdit) { const f = $('#kidTxBody select[aria-label="ผลการส่งต่อ"]'); if (f) f.focus(); }
 }
 
 /* ================================================================ CLAIMS / SERVICE RECORDING (D-65) */

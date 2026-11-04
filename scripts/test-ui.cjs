@@ -5,6 +5,8 @@
 // exam service 174, consent filtering of group activities, monthly submission and deleting a returned claim.
 // Since R2: the issued-ID banner, no preselected child on the claims form, focus kept on PI/GI boxes, the exam
 // service following a corrected exam date, and late plan months closed from the grid and from the claims page.
+// v1.4 (D-79, D-80, D-81): care-plan rules on made-up exams, and an ICDAS 5 tooth referred to the centre's dentist
+// with its result recorded from the services tab.
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
@@ -54,6 +56,7 @@ const iso = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '
 const daysAgo = n => { const t = new Date(); return iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - n)); };
 const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr => re.test(tr.textContent));
 
+let refId = null;
 (async () => {
   console.log('unit public-cap');
   const { w, d, errors } = boot();
@@ -62,7 +65,7 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(await until(() => d.querySelector('#home .tiles')), 'home dashboard renders after login');
   ok(/หน่วยทดสอบ ข/.test(d.querySelector('#acctChip').textContent), 'account chip shows the unit');
   ok(noNull(d), 'no "null" text on the home screen (R1-01)');
-  ok(d.querySelector('#verTag').textContent === 'v1.3 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
+  ok(d.querySelector('#verTag').textContent === 'v1.4 · หน่วยทดสอบ', 'version tag says test unit (R1-16)', d.querySelector('#verTag').textContent);
   ok(d.querySelector('#provSel').value === '' && d.querySelector('#provSel').classList.contains('is-missing'), '"ผู้บันทึก" starts empty and marked (R1-02)');
   ok(d.querySelectorAll('#home .tile--link').length >= 3, 'home tiles open the student list (R1-19)');
   ok(/ค่าเหมาจ่ายรายหัวทั้งปี/.test(d.querySelector('#home').textContent) && /งวดแรก 70%/.test(d.querySelector('#home').textContent), 'home shows the capitation and its 70% first instalment (v1.1)');
@@ -456,10 +459,80 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
     ok(F.errors.length === 0, 'no script errors (follow-up exam)', F.errors.join(' | '));
   }
 
+  console.log('unit public-cap: an ICDAS 5 tooth referred to the centre dentist, and its result (D-80, v1.4)');
+  {
+    const R = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { sb };\n})();\n'));
+    const { w: rw, d: rd } = R;
+    await login(rw, rd, 'public-cap');
+    await until(() => rd.querySelector('#home .tiles'));
+    // set_referral comes with migration referral_d80; until it is applied the form is checked against a stub.
+    const sb = rw.__t.sb, probe = await sb.rpc('set_referral', { p_id: -1, p_status: 'waiting', p_date: null, p_note: null });
+    const stub = !!(probe.error && (probe.error.code === 'PGRST202' || /Could not find the function/.test(probe.error.message)));
+    if (stub) {
+      console.log('  – set_referral is not in the database yet (migration referral_d80 not applied): the result form below runs against a stub');
+      const rpc0 = sb.rpc.bind(sb);
+      sb.rpc = (fn, a) => (fn === 'set_referral' ? Promise.resolve({ data: { ref_status: a.p_status, ref_date: a.p_status === 'waiting' ? null : a.p_date, outcome: a.p_note }, error: null }) : rpc0(fn, a));
+    }
+    set(rw, rd.querySelector('#provSel'), 'TEST-B2');
+    click(rw, rd.querySelector('#t-kids'));
+    click(rw, await until(() => byText(rd, '#kids button', /ลงทะเบียนนักเรียน/)));
+    set(rw, rd.querySelector('#enClass'), 'ป.1/3'); set(rw, rd.querySelector('#enSex'), 'M');
+    rd.querySelector('#enBym').value = '2019-05'; rd.querySelector('#enConsent').value = '2026-10-30'; rd.querySelector('#enAssent').checked = true;
+    rd.querySelector('#enForm').dispatchEvent(new rw.Event('submit', { bubbles: true, cancelable: true }));
+    ok(await until(() => !rd.querySelector('#file').hidden && /TB-\d{3}/.test(rd.querySelector('#fileHead').textContent)), 'a new child is enrolled for the referral check', rd.querySelector('#enMsg').textContent);
+    refId = (rd.querySelector('#fileHead').textContent.match(/TB-\d{3}/) || [])[0];
+    click(rw, await until(() => byText(rd, '#examStart button', /เริ่มบันทึกผลตรวจ/)));
+    await until(() => rd.querySelectorAll('#archL .tooth').length === 12);
+    answerRiskHigh(rw, rd);
+    click(rw, [...rd.querySelectorAll('#archL .tooth .tcode')][0]);   // 46
+    const bBtns = await until(() => { const g = rd.querySelectorAll('#editor .codes'); return g.length >= 4 ? g[1].querySelectorAll('button') : null; });
+    click(rw, bBtns[5]);
+    ok(/ระบบแนะนำ: 4 บูรณะฟัน/.test(rd.querySelector('#editor').textContent), 'tooth 46 at ICDAS 5: the suggested need stays 4 (filling), with a referral (Percy 4 Nov)', rd.querySelector('#editor .codedesc:last-child') && rd.querySelector('#editor').textContent.slice(-120));
+    ok(/ICDAS 5–6 ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่/.test(rd.querySelector('#urgentMsg').textContent) && /ต้องส่งต่อหรือไม่\s*ใช่ · 46/.test(rd.querySelector('#summary').textContent),
+      'the exam says the tooth goes to the centre dentist to confirm pulp involvement', rd.querySelector('#urgentMsg').textContent);
+    const sk = rd.querySelector('#pigiSkip'); sk.checked = true; sk.dispatchEvent(new rw.Event('change', { bubbles: true }));
+    rd.querySelector('#saveExamBtn').click();
+    ok(await until(() => rd.querySelector('#saveBar').hidden && !rd.querySelector('#fp-plan').hidden), 'exam saved; plan opens', toastText(rd));
+    const refRow = () => planRow(rd, /ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่ ซี่ 46/);
+    const fillRow = planRow(rd, /อุดฟัน ซี่ 46/);
+    ok(!!refRow() && /ICDAS 5/.test(refRow().textContent) && fillRow && /อุดเมื่อทันตแพทย์ที่ศูนย์ยืนยันว่าไม่ถึงโพรงประสาทฟัน/.test(fillRow.textContent) && !planRow(rd, /เคลือบหลุมร่องฟัน ซี่ 46/),
+      'plan: "ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่" for 46 and a filling row once the dentist finds no pulp involvement; no sealant row', [...rd.querySelectorAll('#planGrid tbody tr .rowh')].map(x => x.textContent).join(' | '));
+    ok(/ทุก 3 เดือน · เสี่ยงสูงมาก \+ ฟันผุ ICDAS 4–6/.test(planRow(rd, /เคลือบฟลูออไรด์/).textContent), 'plan: fluoride every 3 months for ICDAS 4–6 (D-81)', planRow(rd, /เคลือบฟลูออไรด์/).textContent);
+    click(rw, refRow().querySelector('.anycol button'));
+    ok(await until(() => /บันทึกแล้ว · ส่งต่อทันตแพทย์ที่ศูนย์/.test(toastText(rd))), 'ticking the row records the referral (REF)', toastText(rd));
+    ok(/· รอผล/.test(refRow().querySelector('.anycol').textContent) && byText(rd, '#planGrid .anycol button', /^บันทึกผล$/), 'the plan cell says "รอผล" with a "บันทึกผล" link', refRow().querySelector('.anycol').textContent);
+    const waitN = () => { const m = rd.querySelector('#home').textContent.match(/ส่งแล้ว รอผล (\d+) คน/); return m ? +m[1] : 0; };
+    click(rw, rd.querySelector('#t-home'));
+    const w1 = await until(() => waitN() >= 1 && waitN());
+    ok(w1 >= 1, 'home tile counts the referral as sent and waiting for the result', rd.querySelector('#home .tiles').textContent);
+    click(rw, rd.querySelector('#t-file'));
+    click(rw, rd.querySelector('#ft-plan'));
+    click(rw, await until(() => byText(rd, '#planGrid .anycol button', /^บันทึกผล$/)));
+    const st = await until(() => rd.querySelector('#kidTxBody select[aria-label="ผลการส่งต่อ"]'));
+    ok(!rd.querySelector('#fp-tx').hidden && st && st.value === 'waiting' && rd.querySelector('#kidTxBody input[type="date"]').closest('label').hidden,
+      '"บันทึกผล" opens the result form in the services tab: "ยังไม่ไปพบทันตแพทย์" with no date box');
+    set(rw, st, 'treated');
+    ok(!rd.querySelector('#kidTxBody input[type="date"]').closest('label').hidden, 'a seen or treated result shows the date box');
+    click(rw, byText(rd, '#kidTxBody button', /^บันทึกผล$/));
+    ok(await until(() => /ใส่วันที่นักเรียนไปพบทันตแพทย์/.test(toastText(rd))), 'saving without the date is refused', toastText(rd));
+    set(rw, rd.querySelector('#kidTxBody select[aria-label="ผลการส่งต่อ"]'), 'no_pulp');
+    rd.querySelector('#kidTxBody input[type="date"]').value = daysAgo(0);
+    rd.querySelector('#kidTxBody input[aria-label="หมายเหตุผลส่งต่อ"]').value = 'ทดสอบ test-ui';
+    click(rw, byText(rd, '#kidTxBody button', /^บันทึกผล$/));
+    ok(await until(() => /บันทึกผลส่งต่อแล้ว · พบแล้ว ไม่ถึงโพรงประสาทฟัน/.test(toastText(rd))), 'the result is saved' + (stub ? ' (stub)' : ''), toastText(rd));
+    ok(/ผล: พบแล้ว ไม่ถึงโพรงประสาทฟัน .*· ทดสอบ test-ui/.test(rd.querySelector('#kidTxBody').textContent) && !rd.querySelector('#kidTxBody select[aria-label="ผลการส่งต่อ"]') && byText(rd, '#kidTxBody button', /^แก้ผล$/),
+      'the services tab shows the result, date and note, with "แก้ผล"', rd.querySelector('#kidTxBody').textContent.slice(0, 300));
+    click(rw, rd.querySelector('#ft-plan'));
+    ok(/ไม่ถึงโพรงประสาท/.test(refRow().querySelector('.anycol').textContent) && !/รอผล/.test(refRow().querySelector('.anycol').textContent), 'the plan cell shows the result', refRow().querySelector('.anycol').textContent);
+    click(rw, rd.querySelector('#t-home'));
+    ok(await until(() => waitN() === w1 - 1), 'home tile: one referral fewer waiting for the result', rd.querySelector('#home .tiles').textContent);
+    ok(R.errors.length === 0, 'no script errors (referral)', R.errors.join(' | '));
+  }
+
   console.log('warnings by NHSO fiscal year and the reseal rule (D-77)');
   // Pure check of txFlags on made-up services in a page whose app.js also hands txFlags out; the server pays by the
   // same rules (scripts/test-rls.cjs).
-  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags, fuRows, rowTx, kidFrom, bookletData, teethAt, S };\n})();\n'));
+  const H = boot(src => src.replace(/\}\)\(\);\s*$/, 'window.__t = { txFlags, fuRows, rowTx, kidFrom, bookletData, teethAt, S, needOf, flFreq, buildPlan, childBudget, kidState, REF_CENTRE };\n})();\n'));
   const fl = H.w.eval(`(() => {
     const tx = (id, code, date, tooth) => { const [y, m, d] = date.split('-').map(Number); return { id, kid: 'X', code, tooth: tooth || null, date: new Date(y, m - 1, d) }; };
     const run = (arm, list, exams = []) => { const f = __t.txFlags({ arm, byId: {}, exams, tx: list }); return list.map(t => f.get(t.id).join(' ')); };
@@ -527,6 +600,55 @@ const planRow = (d, re) => [...d.querySelectorAll('#planGrid tbody tr')].find(tr
   ok(r3.c.length === 0, 'R3-08: a lost filling (7r) on a sealed tooth opens no re-seal (D-77, D-78)', JSON.stringify(r3));
   ok(r3.day === 'd' && r3.after === 'n', 'R3-07: on the exam day a tooth that exam found gone is still offered; the day after it is not', JSON.stringify(r3));
 
-  console.log(`\n${pass} passed, ${fail} failed · enrolled ${newId}`);
+  // Care-plan rules on made-up first exams (D-79 sealants, D-80 ICDAS 5–6 referral, D-81 fluoride interval).
+  const cr = H.w.eval(`(() => {
+    const POS = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36], EARLY = [16, 26, 36, 46, 11, 21, 31, 32, 41, 42];
+    const mouth = (e = {}) => { const m = {}; for (const p of POS) m[p] = EARLY.includes(p) ? { t: 'p', A: 0, B: 0, act: null } : { t: 'd', A: 0, B: 0, act: null }; for (const [p, v] of Object.entries(e)) Object.assign(m[p], v); return m; };
+    const RISK = { low: { r1: 'n', r2: 'n', r3: 'y', r4: 'n', r5: 'n', r6: 'n', r7: 'y', r8: 'n' },     // 1 point
+      high: { r1: 'n', r2: 'y', r3: 'n', r4: 'n', r5: 'n', r6: 'n', r7: 'y', r8: 'n' },                   // 3 points
+      vhigh: { r1: 'n', r2: 'y', r3: 'y', r4: 'n', r5: 'y', r6: 'n', r7: 'y', r8: 'y' } };               // 7 points
+    const kid = (lvl, e, flOv = null) => __t.kidFrom({ study_id: 'X', unit_id: 'U', school_id: 's', class: 'ป.1/1', sex: 'F', birth_ym: '2019-06', coverage: 'uc' },
+      { id: 'e', study_id: 'X', unit_id: 'U', round: 'baseline', exam_date: '2026-11-05', attended: true, created_at: '2026-11-05T00:00:00Z', teeth: mouth(e), risk: RISK[lvl],
+        pigi: {}, urgent: {}, need_override: {}, override_reason: {}, fl_override: flOv, place: 'van', examiner_code: 'E1' });
+    const rowOf = (k, tooth) => __t.buildPlan(k).filter(r => r.tooth === tooth).map(r => r.label).join(' + ');
+    const fl = k => { const f = __t.flFreq(k); return [f.f, !!f.sel]; };
+    const u = { id: 'U', arm: 'cap', ptype: 'public', exams: [], txByKid: {} };
+    const k5 = kid('high', { 46: { B: 5, act: 'a' }, 11: { B: 5, act: 'a' } }), k6 = kid('high', { 36: { B: 6, act: 'a' }, 15: { B: 6, act: 'a' }, 14: { B: 5, act: 'a' } });
+    const kSeal = kid('high', { 16: { A: 1, B: 5, act: 'a' } }), k4 = kid('high', { 11: { B: 4, act: 'a' } }), kLow = kid('low', {});
+    const refTx = st => ({ X: [{ id: 1, kid: 'X', code: 'REF', tooth: 46, date: new Date(2026, 10, 5), planKey: 'ref-46', refStatus: st, status: 'recorded' }] });
+    return {
+      icdas5: [__t.needOf(46, k5), __t.needOf(11, k5), rowOf(k5, 46), rowOf(k5, 11), __t.childBudget(u, k5).fillN],
+      icdas6: [__t.needOf(36, k6), __t.needOf(15, k6), __t.needOf(14, k6), rowOf(k6, 36), rowOf(k6, 55), rowOf(k6, 54), __t.childBudget(u, k6).fillN],
+      sealed5: [__t.needOf(16, kSeal), rowOf(kSeal, 16)],
+      icdas4: [__t.needOf(11, k4), rowOf(k4, 11), __t.childBudget(u, k4).fillN],
+      seal: [__t.needOf(26, kLow), rowOf(kLow, 26)],
+      high4: [fl(kid('high', { 11: { B: 4, act: 'a' } })), fl(kid('high', { 11: { B: 4, act: 'a' } }, 6)), fl(kid('high', { 36: { B: 6, act: 'a' } })), fl(kid('high', { 14: { B: 5, act: 'a' } }))],
+      vhigh13: [fl(kid('vhigh', { 21: { B: 2, act: 'a' } })), fl(kid('vhigh', { 36: { B: 3, act: 'a' } }))],
+      high13: [fl(kid('high', { 21: { B: 2, act: 'a' } })), fl(kid('high', { 21: { B: 2, act: 'a' } }, 3))],
+      zero: [fl(kid('high', {})), fl(kid('vhigh', {})), fl(kLow), fl(kid('vhigh', { 46: { B: 5, act: 'a' } }))],
+      lowLesion: fl(kid('low', { 21: { B: 2, act: 'i' } })),
+      wait: [__t.kidState({ ...u, exams: [], txByKid: refTx(null) }, k5).refWait, __t.kidState({ ...u, txByKid: refTx('waiting') }, k5).refWait, __t.kidState({ ...u, txByKid: refTx('no_pulp') }, k5).refWait],
+      label: __t.REF_CENTRE,
+    };
+  })()`);
+  const REF_L = 'ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่';
+  ok(cr.label === REF_L, 'the referral row reads "ส่งต่อทันตแพทย์ที่ศูนย์ ยืนยันว่าถึงโพรงประสาทฟันหรือไม่" (D-80)', cr.label);
+  const REF_FILL = REF_L + ' + อุดฟัน';
+  ok(cr.icdas5[0] === 4 && cr.icdas5[1] === 4 && cr.icdas5[2] === REF_FILL && cr.icdas5[3] === REF_FILL && cr.icdas5[4] === 2,
+    'ICDAS 5 (first molar 46, incisor 11): need 4, referred to the centre dentist and a filling row; both teeth in the filling count (D-60, Percy 4 Nov)', JSON.stringify(cr.icdas5));
+  ok(cr.icdas6[0] === 8 && cr.icdas6[1] === 8 && cr.icdas6[3] === REF_L && cr.icdas6[4] === REF_L && cr.icdas6[6] === 0,
+    'ICDAS 6 (permanent 36, primary 55): need 8, the referral row only; not in the filling count', JSON.stringify(cr.icdas6));
+  ok(cr.icdas6[2] === 4 && cr.icdas6[5] === REF_FILL, 'primary ICDAS 5 (54): referred too, with a filling row outside the budget', JSON.stringify(cr.icdas6));
+  ok(cr.sealed5[0] === 4 && cr.sealed5[1] === REF_FILL, 'a partly sealed first molar with ICDAS 5 at the first exam is referred and filled, not re-sealed', JSON.stringify(cr.sealed5));
+  ok(cr.icdas4[0] === 4 && /^อุดฟัน$/.test(cr.icdas4[1]) && cr.icdas4[2] === 1, 'ICDAS 4 stays "SDF or restoration" (need 4) and counts in the filling budget', JSON.stringify(cr.icdas4));
+  ok(cr.seal[0] === 2 && cr.seal[1] === 'เคลือบหลุมร่องฟัน', 'a low-risk child with a sound erupted first molar still gets a sealant (D-79)', JSON.stringify(cr.seal));
+  ok(cr.high4.every(([f, sel]) => f === 3 && !sel), 'high risk with any tooth ICDAS 4–6: fluoride every 3 months, fixed (no 3–6 choice, a saved 6 is ignored) (D-81)', JSON.stringify(cr.high4));
+  ok(cr.vhigh13.every(([f, sel]) => f === 3 && !sel), 'very high risk with ICDAS 1–3: every 3 months', JSON.stringify(cr.vhigh13));
+  ok(cr.high13[0][0] === 6 && cr.high13[0][1] && cr.high13[1][0] === 3, 'high risk with ICDAS 1–3 only: the examiner chooses 3 or 6 months (default 6)', JSON.stringify(cr.high13));
+  ok(cr.zero[0][0] === 6 && cr.zero[1][0] === 6 && cr.zero[2][0] === 0 && cr.zero[3][0] === 3, 'all teeth ICDAS 0: high and very high every 6 months, low risk none; very high with ICDAS 5: every 3', JSON.stringify(cr.zero));
+  ok(cr.lowLesion[0] === 6, 'low risk with an inactive lesion keeps every 6 months (open, WS2-3 point 2)', JSON.stringify(cr.lowLesion));
+  ok(cr.wait[0] && cr.wait[1] && !cr.wait[2], 'a referral waits for its result until one is recorded ("ยังไม่ไปพบทันตแพทย์" still waits)', JSON.stringify(cr.wait));
+
+  console.log(`\n${pass} passed, ${fail} failed · enrolled ${newId}${refId ? `, ${refId}` : ''}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(2); });
