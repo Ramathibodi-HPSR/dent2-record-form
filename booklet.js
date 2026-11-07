@@ -1,9 +1,12 @@
-/* Dent-II parent booklet v1.1.1 (2 Nov 2026).
+/* Dent-II parent booklet v1.2.0 (app v1.4.3, 8 Nov 2026; review R2 N2, N3, N5 and R3).
    One A4 landscape sheet, printed on both sides (flip on short edge) and folded into a 4-page A5 booklet:
    side 1 (outside) = page 4 back cover | page 1 front cover; side 2 (inside) = page 2 results | page 3 plan.
    Data: the record form writes localStorage 'dent2-booklet'; this page moves it to sessionStorage (a reload in this
    tab still works) and removes it from localStorage. Built-in samples: ?demo, ?demo=heavy, ?demo=max, ?demo=low.
    No names are stored anywhere (D-64): the cover has a line to write the child's name by hand.
+   The unit's phone number is typed once per browser and unit above the sheets and kept in localStorage under the
+   unit's name (no child data; demo pages keep nothing); it fills the back-cover phone line and the urgent box, and an
+   empty field leaves the line blank to write by hand.
    No prices, payment arm or claim status appear: this is the parents' document (guarded in normalize()). */
 (function () {
   'use strict';
@@ -60,6 +63,7 @@
   const VISIT_TIP = 'ให้นักเรียนรับบริการตามนัดที่โรงเรียน (ดูหน้า 3)';
   const STORE_KEY = 'dent2-booklet';
   const FLIP_KEY = 'dent2-booklet-flip';   // per-printer convenience only, no child data
+  const TEL_KEY = 'dent2-booklet-tel';     // + ':' + unit name: the unit's phone number, no child data (R2 N5, R3 P1)
   // Payment-arm and money words never reach parents (review R1 B1). The app also cuts unit names at " · ".
   const MONEY_WORDS = ['เหมาจ่าย', 'รายหัว', 'งบรวม', 'ส่วนประหยัด', 'แบ่งปัน', 'กลุ่มควบคุม', 'จ่ายตามรายการ', 'capitation', 'shared', 'fee-for-service', 'fee for service', 'บาท'];
 
@@ -71,6 +75,22 @@
   // A printed name: the part before " · ", and nothing at all if it still names a payment arm or money.
   const cleanName = v => { const s = str(v).split(' · ')[0].trim(); return hasMoney(s) ? '' : s; };
   const cleanText = v => { const s = str(v); return hasMoney(s) ? '' : s; };
+  // A phone number as typed (review R3 P3): Thai digits become 0-9; "ต่อ", "ext", "x" or "#" between digits is an
+  // extension; "หรือ", "," or "/" before another number separates two numbers; everything else ("ติดต่อ", names) is
+  // dropped, and text with no digit at all gives no number.
+  const cleanPhone = v => {
+    const t = str(v)
+      .replace(/[๐-๙]/g, d => String(d.charCodeAt(0) - 0x0E50))
+      .replace(/(\d)\s*(?:ต่อ|ext\.?|x|#)\s*(?=\d)/gi, '$1\u0001')
+      .replace(/(\d)\s*(?:หรือ|,|\/)\s*(?=[\d+(])/g, '$1\u0002')
+      .replace(/[^0-9+\-() \u0001\u0002]/g, '')
+      .replace(/\(\s*\)/g, '')
+      .replace(/\u0001/g, ' ต่อ ').replace(/\u0002/g, ', ')
+      .replace(/\s+/g, ' ').trim().slice(0, 40);
+    return /\d/.test(t) ? t : '';
+  };
+  // On the back cover a number breaks only after a comma, between two numbers (R3 P2).
+  const telText = p => p.replace(/(\S) (?=\S)/g, '$1\u00A0').replace(/,\u00A0/g, ', ');
   function parseISO(s) {
     const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(str(s));
     if (!m) return null;
@@ -120,6 +140,9 @@
   const f2 = n => (Math.round(n * 100) / 100).toString();
   const blank = (w, cls) => h('span', { class: 'blank' + (cls ? ' ' + cls : ''), style: w ? `width:${w}` : null, 'aria-hidden': 'true' });
   const nw = text => h('span', { class: 'nw', text });   // keep a short phrase on one line ("หน้า 3", "โดยเร็ว")
+  // Phrases that must not break inside (review R2 N2: the month-1 label split as "ความ / เสี่ยง"; R3 P10).
+  const KEEP = /(ประเมินความเสี่ยง|หน่วยบริการ|ตรวจติดตาม)/;
+  const keepTogether = t => t.split(KEEP).map((x, i) => (i % 2 ? nw(x) : x));
 
   /* ================================================================ data model */
   const live = t => t.type === 'p' || t.type === 'd';
@@ -132,6 +155,8 @@
   const lost = t => t.type === 'n' && (t.nCode === 97 || t.nCode === 98);
   const unknown = t => t.type === '?' || (t.type === 'n' && t.nCode === 96);
   const absentT = t => t.type === 'n' && !lost(t) && !unknown(t);
+  // Decay left to fluoride (need 1) or to watching (need 0 or none): the eye mark, in the chart and the list (R1 M3, R2 N3).
+  const watched = t => decayed(t) && (t.need == null || t.need === 0 || t.need === 1);
 
   function normTeeth(list) {
     const byPos = {};
@@ -295,6 +320,7 @@
       findDate: parseISO(ex.findings_date),   // the latest follow-up exam, when there is one (v1.3.1)
       schoolYear: schoolYear(examDate),
       place: cleanText(ex.place),
+      phone: cleanPhone(opts && opts.phone),
       examiner: str(ex.examiner_code),
       level,
       levelLabel: level ? (cleanText(risk.label) || LEVELS[level].th) : '',
@@ -365,7 +391,12 @@
       g.append(s('rect', { x: f2(cx - q), y: f2(cy - q), width: f2(2 * q), height: f2(2 * q), rx: 0.35 * k, fill: '#000' }));
       g.append(s('rect', { x: f2(cx - 0.3 * k), y: f2(cy - 1.15 * k), width: f2(0.6 * k), height: f2(1.45 * k), rx: 0.2 * k, fill: '#fff' }));
       g.append(s('circle', { cx: f2(cx), cy: f2(cy + 0.85 * k), r: f2(0.36 * k), fill: '#fff' }));
-    } else if (kind === 'watch') g.append(s('circle', { cx: f2(cx), cy: f2(cy), r: f2(1.3 * k), fill: '#fff', stroke: '#000', 'stroke-width': 0.45 }));
+    } else if (kind === 'watch') {
+      // An eye (the team watches this tooth), unlike the hollow circles of the early-decay icon and the tips (R2 N3).
+      const ew = 1.6 * k, eh = 0.95 * k;
+      g.append(s('path', { d: `M${f2(cx - ew)},${f2(cy)} Q${f2(cx)},${f2(cy - 2 * eh)} ${f2(cx + ew)},${f2(cy)} Q${f2(cx)},${f2(cy + 2 * eh)} ${f2(cx - ew)},${f2(cy)} Z`, fill: '#fff', stroke: '#000', 'stroke-width': f2(0.42 * k), 'stroke-linejoin': 'round', 'data-mark': 'watch' }));
+      g.append(s('circle', { cx: f2(cx), cy: f2(cy), r: f2(0.58 * k), fill: '#000' }));
+    }
   }
   function hatchDefs(id) {
     return s('svg', { width: 0, height: 0, style: 'position:absolute;width:0;height:0;overflow:hidden', 'aria-hidden': 'true', focusable: 'false' },
@@ -384,6 +415,7 @@
       const g = s('g', {});
       toothGlyph(g, cx, upper ? OCC_U : OCC_L, upper ? -1 : 1, t, hatch);
       if (live(t) && NEED_PLAIN[t.need]) needMark(g, cx, upper ? MARK_U : MARK_L, NEED_PLAIN[t.need][0]);
+      else if (watched(t)) needMark(g, cx, upper ? MARK_U : MARK_L, 'watch');
       g.append(s('text', { x: f2(cx), y: upper ? 3.9 : 47.6, 'text-anchor': 'middle', 'font-size': 3.5, 'font-weight': t.type === 'p' ? 700 : 400, fill: live(t) ? '#111' : '#8a8a8a', class: 'gl' }, String(t.no)));
       svg.append(g);
     });
@@ -453,15 +485,16 @@
     if (t.partial && t.type === 'p') notes.push('ขึ้นไม่เต็มซี่');
     if (t.need === 2 && (t.A === 1 || t.A === 7)) notes.push('เคลือบซ้ำ');
     else if (t.A === 7) notes.push('วัสดุเดิมหลุด');
-    return String(t.no) + (notes.length ? ` (${notes.join(' ')})` : '');
+    return notes.length ? [String(t.no), ' ', nw(`(${notes.join(' ')})`)] : String(t.no);
   };
+  const commaList = xs => xs.map((x, i) => (i ? [', ', x] : x));
   function toothList(list) {
     const byNo = (a, b) => a.no - b.no;
     if (!list.some(live)) return h('span', { class: 'teeth' }, h('span', {}, h('i', { text: 'ตำแหน่ง ' }), list.map(t => t.no).sort(byNum).join(', ')));
     const perm = list.filter(t => t.type === 'p').sort(byNo), prim = list.filter(t => t.type === 'd').sort(byNo);
     return h('span', { class: 'teeth' },
-      perm.length ? h('span', {}, h('i', { text: 'ฟันแท้ ' }), perm.map(toothNote).join(', ')) : null,
-      prim.length ? h('span', {}, h('i', { text: 'ฟันน้ำนม ' }), prim.map(toothNote).join(', ')) : null);
+      perm.length ? h('span', {}, h('i', { text: 'ฟันแท้ ' }), commaList(perm.map(toothNote))) : null,
+      prim.length ? h('span', {}, h('i', { text: 'ฟันน้ำนม ' }), commaList(prim.map(toothNote))) : null);
   }
 
   // Page 1: front cover
@@ -530,7 +563,7 @@
       const o = opts || {};
       return h('div', { class: 'srow' + (list.length ? '' : ' zero') + (icon ? '' : ' noicon') + (o.cls ? ' ' + o.cls : '') }, icon,
         h('div', { class: 'b' },
-          h('span', { class: 't' }, list.length ? [title, ' ', h('em', { text: `${list.length} ซี่` })] : o.zero || `${title}: ไม่มี`),
+          h('span', { class: 't' }, list.length ? [keepTogether(title), ' ', h('em', { text: `${list.length} ซี่` })] : o.zero || `${title}: ไม่มี`),
           list.length ? [' ', toothList(list)] : null,
           o.gloss ? h('span', { class: 'gloss' + (o.glossCls ? ' ' + o.glossCls : ''), text: o.gloss }) : null));
     };
@@ -556,8 +589,8 @@
       todo.append(srow(markIcon(NEED_PLAIN[n][0]), NEED_PLAIN[n][1], list, GLOSS[n] ? { gloss: GLOSS[n], glossCls: n === 3 ? 'keep' : '' } : null));
     }
     // Decayed teeth with no treatment planned are said out loud, so parents do not think they were missed (R1 M3).
-    const watchFl = M.teeth.filter(t => decayed(t) && t.need === 1);
-    const watch = M.teeth.filter(t => decayed(t) && (t.need === 0 || t.need == null));
+    const watchFl = M.teeth.filter(t => watched(t) && t.need === 1);
+    const watch = M.teeth.filter(t => watched(t) && t.need !== 1);
     if (watchFl.length) { nTodo++; todo.append(srow(markIcon('watch'), 'ฟันผุที่ดูแลด้วยฟลูออไรด์และตรวจติดตาม', watchFl)); }
     if (watch.length) { nTodo++; todo.append(srow(markIcon('watch'), 'ฟันผุที่เฝ้าดูอาการ ตรวจติดตามตามนัด', watch)); }
     if (!nTodo) todo.append(srow(null, '', [], { zero: known ? 'ไม่มีฟันที่ต้องอุดหรือรักษา' : 'ไม่มีข้อมูลรายซี่' }));
@@ -589,7 +622,7 @@
       h('div', {},
         h('div', { class: 'big' }, 'นักเรียนควรได้รับการรักษา', nw('โดยเร็ว')),
         h('div', { class: 'why' }, `เพราะ${joinTh(why)}`, soon.length ? h('span', { class: 'soonlist', text: ` (ซี่ ${soon.join(', ')})` }) : null),
-        h('div', {}, h('span', { class: 'adv1', text: 'ทีมทันตกรรมจะแนะนำการรักษาต่อ ' }), 'หากปวดหรือบวมมากขึ้น ให้พาไปพบทันตแพทย์ทันที หรือโทรหาหน่วยบริการ ', nw('(เบอร์ที่ปกหลัง)'))));
+        h('div', {}, h('span', { class: 'adv1', text: 'ทีมทันตกรรมจะแนะนำการรักษาต่อ ' }), keepTogether('หากปวดหรือบวมมากขึ้น ให้พาไปพบทันตแพทย์ทันที หรือโทรหาหน่วยบริการ '), M.phone ? h('b', { class: 'nw', text: M.phone }) : nw('(เบอร์ที่ปกหลัง)'))));
   }
 
   // Page 3: the 12-month care plan; one box per due service (or per tooth) for the dental team to tick and date.
@@ -597,7 +630,7 @@
     const done = doneText(it.done);
     return h('div', { class: 'it' + (done ? ' done' : '') },
       h('span', { class: 'box', role: 'img', 'aria-label': done ? 'ทำแล้ว' : 'ยังไม่ได้รับบริการ' }, done ? tickSvg(4) : null),
-      h('span', { class: 'lab' }, it.r.mark ? markIcon(it.r.mark, 3.4) : null, it.label),
+      h('span', { class: 'lab' }, it.r.mark ? markIcon(it.r.mark, 3.4) : null, keepTogether(it.label)),
       h('span', { class: 'dt' }, done || [h('span', { class: 'w', text: 'วันที่ ' }), blank()]));
   }
   function chipEl(t) {
@@ -651,7 +684,7 @@
       h('div', { class: 'plan-intro' },
         M.examDate ? h('div', {}, `เดือนที่ 1 เริ่มวันตรวจครั้งแรก ${beDate(M.examDate)}`, o.merge === 2 ? ' เดือนที่ไม่มีในตารางไม่มีนัด' : '') : null,
         h('div', { text: 'ทีมทันตกรรมจะติ๊ก ✓ และลงวันที่ทุกครั้งที่ให้บริการ' }),
-        M.reprint ? h('div', { class: 'reprint', text: `ฉบับพิมพ์ซ้ำ ${beDate(M.printedOn)}: บริการก่อนหน้านี้บางรายการอาจไม่แสดง ดูได้ในระบบของหน่วยบริการ` }) : null),
+        M.reprint ? h('div', { class: 'reprint' }, keepTogether(`ฉบับพิมพ์ซ้ำ ${beDate(M.printedOn)}: บริการก่อนหน้านี้บางรายการอาจไม่แสดง ดูได้ในระบบของหน่วยบริการ`)) : null),
       hasPlan && M.tl.months.some(x => x.items.length) ? h('table', { class: 'tl' + (o.flow ? ' flow' : '') },
         h('thead', {}, h('tr', {}, h('th', { class: 'mn', scope: 'col', text: 'เดือนที่' }), h('th', { class: 'ml', scope: 'col', text: 'ช่วงวันที่' }), h('th', { scope: 'col', text: 'บริการตามแผน' }))),
         tbody) : null,
@@ -691,7 +724,7 @@
       h('div', { class: 'backfoot' },
         h('div', {},
           h('div', { class: 'unit' }, M.unit || h('span', {}, 'หน่วยบริการ ', blank('45mm'))),
-          h('div', { class: 'ln' }, 'ติดต่อหน่วยบริการ โทร', blank('38mm')),
+          h('div', { class: 'ln' + (M.phone ? ' ln--tel' : '') }, 'ติดต่อหน่วยบริการ โทร', M.phone ? h('b', { class: 'tel', text: telText(M.phone) }) : blank('38mm')),
           h('div', { text: `หากพบสมุดเล่มนี้ กรุณาส่งคืน${M.school || 'โรงเรียนของนักเรียน'}` }),
           M.printedOn ? h('div', { class: 'muted', text: `พิมพ์เมื่อ ${beDate(M.printedOn)}` }) : null),
         h('div', { class: 'id' }, M.id ? ['รหัส ', M.id] : null)));
@@ -945,10 +978,18 @@
     const demo = q.has('demo');
     const data = demo ? (DEMOS[q.get('demo')] || DEMOS.typical) : takeRecord();
     const btns = ['printBtn', 'printOut', 'printIn'].map(id => document.getElementById(id)).filter(Boolean);
-    if (!data) { noData(stage); return; }
+    const tel = document.getElementById('unitTel'), telSet = document.getElementById('telSet'), telNote = document.getElementById('unitTelNote');
+    if (!data) { if (telSet) telSet.hidden = true; noData(stage); return; }
     const tag = document.getElementById('demoTag');
     if (tag) tag.hidden = !demo;
-    const res = render(data, stage, { demo });
+    // The unit's phone number (review R2 N5): typed once per browser and kept under the unit's name, so a PC that
+    // prints for two units never puts one unit's number on the other's booklets; demo pages keep nothing (R3 P1).
+    const unitName = cleanName(data.unit && data.unit.name);
+    const telKey = demo ? null : `${TEL_KEY}:${unitName || 'unit'}`;
+    let phone = tel && telKey ? cleanPhone(ls.get(telKey)) : '';
+    const noteTel = msg => { if (telNote) telNote.textContent = msg || (demo ? 'หน้าตัวอย่าง ไม่บันทึกเบอร์' : `ใช้กับ${unitName ? ' ' + unitName : 'หน่วยบริการนี้'}`); };
+    if (tel) { tel.value = phone; noteTel(); }
+    let res = render(data, stage, { demo, phone });
     const M = res.model;
     const who = document.getElementById('who');
     if (who) who.textContent = [M.id ? `รหัส ${M.id}` : '', M.examDate ? `ตรวจ ${beShort(M.examDate)}` : ''].filter(Boolean).join(' ');
@@ -967,6 +1008,20 @@
     window.addEventListener('load', refit);
     window.addEventListener('resize', zoomToFit);
     window.addEventListener('beforeprint', () => { res.refit(); });
+    if (tel) {
+      let wait = null;
+      const apply = () => {
+        const p = cleanPhone(tel.value);
+        noteTel(tel.value.trim() && !p ? 'ไม่พบตัวเลข ตรวจว่าแป้นพิมพ์เป็นภาษาอังกฤษ' : '');
+        if (p === phone) return;
+        phone = p;
+        if (telKey) { if (p) ls.set(telKey, p); else ls.del(telKey); }
+        res = render(data, stage, { demo, phone });
+        zoomToFit();
+      };
+      tel.addEventListener('input', () => { clearTimeout(wait); wait = setTimeout(apply, 250); });
+      tel.addEventListener('change', () => { clearTimeout(wait); apply(); if (phone || !tel.value.trim()) tel.value = phone; });
+    }
     // One side only (printers without duplex): hide the other sheet for this print.
     const printSide = side => () => {
       document.body.classList.remove('print-out', 'print-in');
@@ -987,7 +1042,7 @@
     }
   }
 
-  window.Dent2Booklet = { render: (data, container) => render(data, container), demos: DEMOS, version: '1.1.1' };
+  window.Dent2Booklet = { render: (data, container, opts) => render(data, container, opts), demos: DEMOS, version: '1.2.0' };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();

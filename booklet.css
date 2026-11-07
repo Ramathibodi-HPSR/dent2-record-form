@@ -1,4 +1,4 @@
-/* Dent-II parent booklet v1.1.1: one A4 landscape sheet, duplex (flip on short edge), folded into a 4-page A5 booklet.
+/* Dent-II parent booklet v1.2.0: one A4 landscape sheet, duplex (flip on short edge), folded into a 4-page A5 booklet.
    Side 1 (outside) = page 4 | page 1. Side 2 (inside) = page 2 | page 3.
    Black-and-white safe: every mark has a shape, pattern or word, never colour alone. */
 :root {
@@ -48,6 +48,14 @@ body {
 .btn-print[disabled], .btn-side[disabled] { background: #9aa; border-color: #9aa; color: #fff; cursor: not-allowed; }
 .flip { font-size: .9rem; color: var(--ink-2); display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .flip input { width: 18px; height: 18px; }
+/* the unit's phone number, kept per browser (review R2 N5) */
+.tel-set { display: flex; flex-direction: column; gap: 3px; max-width: 260px; }
+.tel-set label { font: 500 .95rem/1.3 var(--f-head); color: var(--ink); }
+.tel-set input { font: 500 16px/1.3 var(--f-body); padding: 7px 9px; border: 1px solid #8a8a84; border-radius: 8px; color: var(--ink); background: #fff; }
+.tel-set input:focus-visible { outline: 3px solid #f0a020; outline-offset: 1px; }
+.tel-set small { font: 400 .8rem/1.35 var(--f-body); color: var(--muted); }
+.tel-set .tel-note { color: var(--accent); font-weight: 600; }
+.tel-set .tel-note:empty { display: none; }
 .ctl a { color: var(--accent); text-align: center; }
 .ctl .who { font-size: .9rem; color: var(--muted); text-align: center; }
 .demo-tag { display: inline-block; font: 600 .8rem/1.6 var(--f-head); background: #fff3c4; border: 1px solid #c9a300; color: #5a4600; border-radius: 6px; padding: 0 8px; margin-left: 8px; vertical-align: middle; }
@@ -173,7 +181,7 @@ body {
 .srow .t { font-weight: 700; margin-right: 1.5mm; }
 .srow .t em { font-style: normal; font-weight: 400; }
 .srow .teeth { font-size: var(--fs-s); color: var(--ink-2); }
-.srow .teeth span { margin-right: 2.5mm; }
+.srow .teeth > span { margin-right: 2.5mm; }
 .srow .teeth i { font-style: normal; color: var(--muted); white-space: nowrap; }
 .srow .gloss { display: block; font-size: var(--fs-s); color: var(--ink-2); line-height: 1.3; margin-top: .3mm; }
 .srow .gloss.keep { font-weight: 700; }
@@ -249,10 +257,15 @@ body {
 .return .big { font: 600 12.5pt/1.25 var(--f-head); }
 .return .ln { display: flex; align-items: flex-end; gap: 1.5mm; margin-top: 2mm; font-size: var(--fs-s); white-space: nowrap; }
 .return .ln .blank { flex: 1; height: 6mm; }
-.backfoot { margin-top: 3.5mm; border-top: .3mm solid var(--line-soft); padding-top: 1.5mm; font-size: var(--fs-s); color: var(--ink-2); display: grid; grid-template-columns: 1fr auto; gap: 1mm 4mm; }
+.backfoot { margin-top: 3.5mm; border-top: .3mm solid var(--line-soft); padding-top: 1.5mm; font-size: var(--fs-s); color: var(--ink-2); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1mm 4mm; }
 .backfoot .unit { font: 600 11pt/1.3 var(--f-head); color: var(--ink); }
 .backfoot .ln { display: flex; align-items: flex-end; gap: 1.5mm; height: 7mm; white-space: nowrap; }
 .backfoot .ln .blank { height: 5.5mm; }
+.backfoot .ln .tel { font: 600 11pt/1.3 var(--f-head); color: var(--ink); letter-spacing: .02em; }
+/* a kept phone number wraps only after a comma (telText), so a long entry never pushes the ID into the fold (R3 P2) */
+.backfoot .ln.ln--tel { flex-wrap: wrap; height: auto; min-height: 7mm; white-space: normal; }
+.backfoot .ln--tel .tel { overflow-wrap: anywhere; }
+.backfoot .id { white-space: nowrap; }
 .backfoot .id { font: 600 12pt/1.3 var(--f-head); color: var(--ink); text-align: right; }
 
 /* ---------------------------------------------------------------- fit steps, added by booklet.js only when a page would overflow */
