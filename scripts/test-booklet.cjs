@@ -35,7 +35,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // PDF text loses Thai marks and gains spaces: compare without spaces, zero-width breaks and combining marks.
 const norm = t => String(t).normalize('NFC').replace(/[\s\u0000-\u001f\u00a0\u200b-\u200d\u2060\ufeff\ufffd\uf700-\uf71f]/g, '').replace(/[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]/g, '').replace(/\u0e33/g, '\u0e32').toLowerCase();
-const moneyIn = (text, loose) => { const t = loose ? norm(text) : text.toLowerCase(); return MONEY.filter(w => t.includes(loose ? norm(w) : w.toLowerCase())); };
+const ZW = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;   // invisible marks never hide a word (R3 P8)
+const moneyIn = (text, loose) => { const t = loose ? norm(text) : text.replace(ZW, '').toLowerCase(); return MONEY.filter(w => t.includes(loose ? norm(w) : w.toLowerCase())); };
 
 // ---------------------------------------------------------------- static server for the app folder
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
@@ -117,12 +118,15 @@ function buildCases(D) {
   const maxWatch = clone(D.max);   // both watch rows: one decayed tooth left to fluoride, one left to watch
   Object.assign(maxWatch.exam.teeth.find(t => t.pos === 13), { need: 1 });
   Object.assign(maxWatch.exam.teeth.find(t => t.pos === 33), { need: 0 });
+  const armZw = clone(D.typical);   // arm words split by zero-width spaces, no " · " to cut at (R3 P8)
+  armZw.unit.name = 'หน่วยทดสอบ ค เหมา\u200Bจ่าย\u200Bราย\u200Bหัว';
+  armZw.child.school = 'โรงเรียนทดสอบ กลุ่ม\u200Bควบคุม';
   const nodate = { v: 1, child: { study_id: '45-003' }, unit: {}, exam: { teeth: [{ pos: 16, type: 'p', A: 0, B: 4, need: 4 }, { pos: 99 }, null], risk: { level: 'x' } },
     plan: [{ label: 'อุดฟัน ซี่ 16', category: 'tx', months: ['x', 13], done: [{ date: '2026-13-40' }] }, { label: null }, 'junk'] };
   return [
     ['typical', D.typical], ['heavy', D.heavy], ['max', D.max], ['low', D.low],
     ['stressmax', stress(D.max, true)], ['stressheavy', stress(D.heavy, false)],
-    ['sparse', sparse], ['crown', crown], ['armguard', armguard, { unit: 'หน่วยทดสอบ ข' }], ['nodate', nodate],
+    ['sparse', sparse], ['crown', crown], ['armguard', armguard, { unit: 'หน่วยทดสอบ ข' }], ['armguard-zw', armZw, { noName: /หน่วยทดสอบ|โรงเรียนทดสอบ/ }], ['nodate', nodate],
     ['typical+tel', D.typical, { phone: PHONE }], ['heavy+tel', D.heavy, { phone: PHONE }],
     ['stressmax+tel', stress(D.max, true), { phone: PHONE }], ['stressheavy+tel', stress(D.heavy, false), { phone: PHONE }],
     ['low+tel', D.low, { phone: PHONE }],
@@ -230,6 +234,7 @@ const READY = `new Promise(r => { const t0 = Date.now(); (function poll() { cons
       if (r.urgent) ok(r.urgent.includes('(เบอร์ที่ปกหลัง)'), 'the urgent box points to the back cover');
     }
     if (k.unit) ok(r.unitBack === k.unit, `the unit name is cut before " · " (${k.unit})`, r.unitBack);
+    if (k.noName) ok(!k.noName.test(r.text), 'a name hiding an arm word behind zero-width spaces is left out (R3 P8)', (r.text.match(k.noName) || [])[0]);
     if (k.name === 'crown') ok(r.urgent === null, 'crown and extraction alone open no urgent box (R1 M1)');
     const file = path.join(OUT, `${k.name}.pdf`);
     pdfs.push({ k, file: await pdf(file) });

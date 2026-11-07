@@ -1969,7 +1969,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty || exK().dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.4.3', '_blank');
+  const w = window.open('booklet.html?v=1.4.4', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 

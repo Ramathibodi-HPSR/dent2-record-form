@@ -1,4 +1,4 @@
-/* Dent-II parent booklet v1.2.0 (app v1.4.3, 8 Nov 2026; review R2 N2, N3, N5 and R3).
+/* Dent-II parent booklet v1.2.1 (app v1.4.4, 8 Nov 2026; review R2 N2, N3, N5 and R3, R3 P8).
    One A4 landscape sheet, printed on both sides (flip on short edge) and folded into a 4-page A5 booklet:
    side 1 (outside) = page 4 back cover | page 1 front cover; side 2 (inside) = page 2 results | page 3 plan.
    Data: the record form writes localStorage 'dent2-booklet'; this page moves it to sessionStorage (a reload in this
@@ -71,7 +71,9 @@
   const str = v => (v === null || v === undefined || typeof v === 'object' ? '' : String(v).trim());
   const arr = v => (Array.isArray(v) ? v : []);
   const toNum = v => (v === null || v === undefined || v === '' || typeof v === 'boolean' || !isFinite(+v) ? null : +v);
-  const hasMoney = s => { const l = s.toLowerCase(); return MONEY_WORDS.some(w => l.includes(w.toLowerCase())); };
+  // Invisible marks (zero-width spaces from Word, soft hyphens) cannot hide a word from the guard (review R3 P8).
+  const ZW = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
+  const hasMoney = s => { const l = s.replace(ZW, '').toLowerCase(); return MONEY_WORDS.some(w => l.includes(w.toLowerCase())); };
   // A printed name: the part before " · ", and nothing at all if it still names a payment arm or money.
   const cleanName = v => { const s = str(v).split(' · ')[0].trim(); return hasMoney(s) ? '' : s; };
   const cleanText = v => { const s = str(v); return hasMoney(s) ? '' : s; };
@@ -1042,7 +1044,7 @@
     }
   }
 
-  window.Dent2Booklet = { render: (data, container, opts) => render(data, container, opts), demos: DEMOS, version: '1.2.0' };
+  window.Dent2Booklet = { render: (data, container, opts) => render(data, container, opts), demos: DEMOS, version: '1.2.1' };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
