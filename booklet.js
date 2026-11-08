@@ -1,4 +1,4 @@
-/* Dent-II parent booklet v1.2.1 (app v1.4.4, 8 Nov 2026; review R2 N2, N3, N5 and R3, R3 P8).
+/* Dent-II parent booklet v1.3.0 (app v1.4.5, 8 Nov 2026; review R2 N2, N3, N5 and R3 P1–P10).
    One A4 landscape sheet, printed on both sides (flip on short edge) and folded into a 4-page A5 booklet:
    side 1 (outside) = page 4 back cover | page 1 front cover; side 2 (inside) = page 2 results | page 3 plan.
    Data: the record form writes localStorage 'dent2-booklet'; this page moves it to sessionStorage (a reload in this
@@ -39,7 +39,7 @@
   // ICDAS 5 stays a filling (4) and is also referred to the centre's dentist (D-80, Percy 4 Nov), so it shows under both.
   const centreRef = t => t.need === 4 && t.B >= 5;
   const isSoon = t => SOON.includes(t.need) || centreRef(t);
-  // Clinical wording to be confirmed by the dental team (review R1 M4 and polish).
+  // Clinical wording (review R1 M4 and polish); the dental team accepted it (Percy, 8 Nov 2026).
   const GLOSS = {
     2: 'กันฟันผุที่ร่องฟันกราม',
     3: 'ยาจะทำให้รอยผุเป็นสีดำ เป็นเรื่องปกติ ช่วยหยุดฟันผุ',
@@ -593,8 +593,11 @@
     // Decayed teeth with no treatment planned are said out loud, so parents do not think they were missed (R1 M3).
     const watchFl = M.teeth.filter(t => watched(t) && t.need === 1);
     const watch = M.teeth.filter(t => watched(t) && t.need !== 1);
-    if (watchFl.length) { nTodo++; todo.append(srow(markIcon('watch'), 'ฟันผุที่ดูแลด้วยฟลูออไรด์และตรวจติดตาม', watchFl)); }
-    if (watch.length) { nTodo++; todo.append(srow(markIcon('watch'), 'ฟันผุที่เฝ้าดูอาการ ตรวจติดตามตามนัด', watch)); }
+    // Both kinds: at the tightest fit step (c2) the two rows become one (review R3 P7; wording Percy, 8 Nov 2026).
+    const both = watchFl.length && watch.length;
+    if (watchFl.length) { nTodo++; todo.append(srow(markIcon('watch'), 'ฟันผุที่ดูแลด้วยฟลูออไรด์และตรวจติดตาม', watchFl, { cls: both ? 'watch-one' : '' })); }
+    if (watch.length) { nTodo++; todo.append(srow(markIcon('watch'), 'ฟันผุที่เฝ้าดูอาการ ตรวจติดตามตามนัด', watch, { cls: both ? 'watch-one' : '' })); }
+    if (both) todo.append(srow(markIcon('watch'), 'ฟันผุที่ตรวจติดตาม (ฟลูออไรด์หรือเฝ้าดูอาการ)', watchFl.concat(watch), { cls: 'watch-all' }));
     if (!nTodo) todo.append(srow(null, '', [], { zero: known ? 'ไม่มีฟันที่ต้องอุดหรือรักษา' : 'ไม่มีข้อมูลรายซี่' }));
     const whole = [];
     const cats = new Set(M.plan.map(r => r.cat));
@@ -984,13 +987,26 @@
     if (!data) { if (telSet) telSet.hidden = true; noData(stage); return; }
     const tag = document.getElementById('demoTag');
     if (tag) tag.hidden = !demo;
-    // The unit's phone number (review R2 N5): typed once per browser and kept under the unit's name, so a PC that
-    // prints for two units never puts one unit's number on the other's booklets; demo pages keep nothing (R3 P1).
+    // The unit's phone number (review R2 N5): the app sends the number the unit gave (unit.phone, Percy 8 Nov 2026).
+    // A number typed here replaces it on this PC, kept under the unit's name, so a PC that prints for two units never
+    // puts one unit's number on the other's booklets; demo pages keep nothing (R3 P1). An empty field uses the
+    // unit's number from the system, or leaves the blank line when there is none.
     const unitName = cleanName(data.unit && data.unit.name);
+    const sysPhone = cleanPhone(data.unit && data.unit.phone);
     const telKey = demo ? null : `${TEL_KEY}:${unitName || 'unit'}`;
-    let phone = tel && telKey ? cleanPhone(ls.get(telKey)) : '';
-    const noteTel = msg => { if (telNote) telNote.textContent = msg || (demo ? 'หน้าตัวอย่าง ไม่บันทึกเบอร์' : `ใช้กับ${unitName ? ' ' + unitName : 'หน่วยบริการนี้'}`); };
-    if (tel) { tel.value = phone; noteTel(); }
+    const sameTel = (a, b) => !!a && a.replace(/\D/g, '') === b.replace(/\D/g, '');   // digits only (R3c R1)
+    let own = tel && telKey ? cleanPhone(ls.get(telKey)) : '';
+    if (own && sameTel(own, sysPhone)) { own = ''; ls.del(telKey); }   // kept before the system had the number
+    let phone = own || sysPhone;
+    const noteTel = msg => {
+      if (!telNote) return;
+      const who = unitName || 'หน่วยบริการนี้';
+      telNote.textContent = msg || (demo ? 'หน้าตัวอย่าง ไม่บันทึกเบอร์'
+        : own && sysPhone ? `ใช้เบอร์ที่กรอกกับ ${who} ลบออกเพื่อกลับไปใช้เบอร์จากระบบ ${sysPhone}`
+        : sysPhone ? `ใช้เบอร์จากระบบของ ${who}`
+        : own ? `ใช้กับ ${who}` : `ใช้กับ ${who} เว้นว่าง = เขียนด้วยมือ`);
+    };
+    if (tel) { tel.value = own; if (sysPhone) tel.placeholder = sysPhone; noteTel(); }
     let res = render(data, stage, { demo, phone });
     const M = res.model;
     const who = document.getElementById('who');
@@ -1014,15 +1030,16 @@
       let wait = null;
       const apply = () => {
         const p = cleanPhone(tel.value);
+        own = p && !sameTel(p, sysPhone) ? p : '';   // the system's own number is not kept again
+        if (telKey) { if (own) ls.set(telKey, own); else ls.del(telKey); }
         noteTel(tel.value.trim() && !p ? 'ไม่พบตัวเลข ตรวจว่าแป้นพิมพ์เป็นภาษาอังกฤษ' : '');
-        if (p === phone) return;
-        phone = p;
-        if (telKey) { if (p) ls.set(telKey, p); else ls.del(telKey); }
+        if ((own || sysPhone) === phone) return;
+        phone = own || sysPhone;
         res = render(data, stage, { demo, phone });
         zoomToFit();
       };
       tel.addEventListener('input', () => { clearTimeout(wait); wait = setTimeout(apply, 250); });
-      tel.addEventListener('change', () => { clearTimeout(wait); apply(); if (phone || !tel.value.trim()) tel.value = phone; });
+      tel.addEventListener('change', () => { clearTimeout(wait); apply(); if (!tel.value.trim() || cleanPhone(tel.value)) tel.value = own; });
     }
     // One side only (printers without duplex): hide the other sheet for this print.
     const printSide = side => () => {
@@ -1044,7 +1061,7 @@
     }
   }
 
-  window.Dent2Booklet = { render: (data, container, opts) => render(data, container, opts), demos: DEMOS, version: '1.2.1' };
+  window.Dent2Booklet = { render: (data, container, opts) => render(data, container, opts), demos: DEMOS, version: '1.3.0' };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();

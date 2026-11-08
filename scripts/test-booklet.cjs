@@ -5,8 +5,9 @@
 //  - DOM: no console errors, the web fonts really loaded, nothing overflows its A5 half in height (fit steps per
 //    page) or in width (kept-together phrases, the phone and the ID stay inside the page margins; the back-cover ID
 //    on one line), no money or payment-arm word, "ประเมินความเสี่ยง" kept whole (R2 N2), one eye mark per watched
-//    decayed tooth (R2 N3), the unit's phone on the back cover and in the urgent box when kept for that unit, the
-//    blank line when not (R2 N5, R3 P1);
+//    decayed tooth (R2 N3) and, with both kinds of watched decay, one merged row at fit step c2 (R3 P7); the unit's
+//    phone from the system (unit.phone) or kept for that unit on the back cover and in the urgent box, the blank line
+//    when there is none (R2 N5, R3 P1);
 //  - PDF: 2 pages of A4 landscape; the money check again on the PDF text after spaces, control characters and Thai
 //    marks are taken out of both sides, because PDF text splits or blanks Thai marks ("ครั ง") (R2 N6, R3 P4).
 //    Control: every Thai money word planted in each body font must be caught. The DOM check stays the primary one.
@@ -26,6 +27,7 @@ const SRC = fs.readFileSync(path.join(APP, 'booklet.js'), 'utf8');
 const MONEY = JSON.parse(/const MONEY_WORDS = (\[[^\]]+\])/.exec(SRC)[1].replace(/'/g, '"'));
 const PHONE = '0 2201 1234 ต่อ 5678';
 const PHONE39 = '081-234-5678, 089-876-5432, 02-201-1234';   // near the field's 40 characters (R3 P2)
+const SYS = '02-426-3514';   // a unit's number from the system (app.js UNIT_TEL)
 const telKey = d => 'dent2-booklet-tel:' + (String((d.unit && d.unit.name) || '').split(' · ')[0].trim() || 'unit');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -87,6 +89,7 @@ async function chrome() {
 
 // ---------------------------------------------------------------- cases (made-up records, as app.js bookletData() sends them)
 const clone = o => JSON.parse(JSON.stringify(o));
+const withSys = d => { const x = clone(d); x.unit.phone = SYS; return x; };   // as app.js sends a unit's number
 const addDays = (iso, n) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
 const LONG_UNIT = 'โรงพยาบาลส่งเสริมสุขภาพตำบลบ้านหนองบัวทองพัฒนา อำเภอเมืองปทุมธานี';
 function stress(d, allDone) {
@@ -118,6 +121,8 @@ function buildCases(D) {
   const maxWatch = clone(D.max);   // both watch rows: one decayed tooth left to fluoride, one left to watch
   Object.assign(maxWatch.exam.teeth.find(t => t.pos === 13), { need: 1 });
   Object.assign(maxWatch.exam.teeth.find(t => t.pos === 33), { need: 0 });
+  const heavyWatch = clone(D.heavy);   // heavy plus a decayed primary canine left to watch: overflowed page 2 before P7
+  Object.assign(heavyWatch.exam.teeth.find(t => t.pos === 33), { B: 3, need: 0 });
   const armZw = clone(D.typical);   // arm words split by zero-width spaces, no " · " to cut at (R3 P8)
   armZw.unit.name = 'หน่วยทดสอบ ค เหมา\u200Bจ่าย\u200Bราย\u200Bหัว';
   armZw.child.school = 'โรงเรียนทดสอบ กลุ่ม\u200Bควบคุม';
@@ -131,7 +136,8 @@ function buildCases(D) {
     ['stressmax+tel', stress(D.max, true), { phone: PHONE }], ['stressheavy+tel', stress(D.heavy, false), { phone: PHONE }],
     ['low+tel', D.low, { phone: PHONE }],
     ['heavy+tel39', D.heavy, { phone: PHONE39 }], ['max+tel39', D.max, { phone: PHONE39 }], ['stressmax+tel39', stress(D.max, true), { phone: PHONE39 }],
-    ['max+watch', maxWatch], ['typical+otherunit', D.typical, { phone: PHONE, keyFrom: D.heavy }],
+    ['max+watch', maxWatch], ['heavy+watch', heavyWatch], ['typical+otherunit', D.typical, { phone: PHONE, keyFrom: D.heavy }],
+    ['typical+sys', withSys(D.typical), { sys: SYS }], ['heavy+sys', withSys(D.heavy), { sys: SYS }], ['typical+sys+own', withSys(D.typical), { sys: SYS, phone: PHONE }],
   ].map(([name, data, o]) => ({ name, data, ...(o || {}) }));
 }
 // Watched teeth (the eye mark): live, ICDAS 3 or more, need fluoride (1), none (0) or not set.
@@ -161,6 +167,10 @@ const READ = `(() => {
       return { n: ls.length, ok: ls.every(l => [...l.querySelectorAll('.nw')].some(n => n.textContent === 'ประเมินความเสี่ยง' && n.getClientRects().length === 1)) }; })(),
     eyes: qa('.chart svg [data-mark="watch"]').length,
     watchRows: qa('.todo .srow').filter(r => /ฟันผุที่ดูแลด้วยฟลูออไรด์|ฟันผุที่เฝ้าดูอาการ/.test(r.textContent)).length,
+    watchShown: qa('.todo .srow').filter(r => /^ฟันผุที่(ดูแลด้วย|เฝ้าดู|ตรวจติดตาม)/.test(r.textContent.trim()) && getComputedStyle(r).display !== 'none').map(r => r.querySelector('.t').textContent.replace(/ \\d+ ซี่$/, '')),
+    c2: !!q('.page.results.c2'),
+    note: q('#unitTelNote') ? q('#unitTelNote').textContent : null,
+    placeholder: q('#unitTel') ? q('#unitTel').placeholder : null,
     tel: q('.backfoot .tel') ? q('.backfoot .tel').textContent.replace(/\\u00a0/g, ' ') : null,
     telBlank: !!q('.backfoot .ln .blank'),
     urgent: urgent ? urgent.textContent : null,
@@ -225,8 +235,16 @@ const READY = `new Promise(r => { const t0 = Date.now(); (function poll() { cons
     ok(r.keep.ok && r.keep.n === (firstExam ? 1 : 0), '"ประเมินความเสี่ยง" stays on one line in the month-1 row (N2)', JSON.stringify(r.keep));
     const w = watchedIn(k.data);
     ok(r.eyes === w && (w > 0) === (r.watchRows > 0), `eye marks in the chart = watched decayed teeth (${w}) and their list rows (N3)`, `eyes ${r.eyes}, rows ${r.watchRows}`);
+    const kinds = new Set(((k.data.exam && k.data.exam.teeth) || []).filter(t => t && ['p', 'd'].includes(t.type) && +t.B >= 3 && (t.need == null || +t.need <= 1)).map(t => (+t.need === 1 ? 'fl' : 'watch')));
+    if (kinds.size === 2) ok(JSON.stringify(r.watchShown) === JSON.stringify(r.c2 ? ['ฟันผุที่ตรวจติดตาม (ฟลูออไรด์หรือเฝ้าดูอาการ)'] : ['ฟันผุที่ดูแลด้วยฟลูออไรด์และตรวจติดตาม', 'ฟันผุที่เฝ้าดูอาการ ตรวจติดตามตามนัด']),
+      `both kinds of watched decay: ${r.c2 ? 'one merged row at step c2' : 'two rows'} (R3 P7)`, JSON.stringify(r.watchShown));
     if (k.keyFrom) ok(r.tel === null && r.telBlank && r.field === '', "another unit's kept number is not used (R3 P1)", JSON.stringify([r.field, r.tel]));
-    else if (k.phone) {
+    else if (k.sys) {
+      const want = k.phone || k.sys;
+      ok(r.tel === want && r.field === (k.phone || '') && r.placeholder === k.sys, `the ${k.phone ? 'number typed on this PC replaces' : 'unit number from the system fills'} the back-cover line`, JSON.stringify([r.field, r.placeholder, r.tel]));
+      ok(k.phone ? /ลบออกเพื่อกลับไปใช้เบอร์จากระบบ/.test(r.note) : /ใช้เบอร์จากระบบ/.test(r.note), 'the field says which number is used', r.note);
+      if (r.urgent) ok(r.urgent.includes(want) && !r.urgent.includes('เบอร์ที่ปกหลัง'), 'the urgent box gives the number itself', r.urgent);
+    } else if (k.phone) {
       ok(r.field === k.phone && r.tel === k.phone && !r.telBlank, 'the kept phone fills the field and the back-cover line (N5)', JSON.stringify([r.field, r.tel]));
       if (r.urgent) ok(r.urgent.includes(k.phone) && !r.urgent.includes('เบอร์ที่ปกหลัง'), 'the urgent box gives the number itself (N5)', r.urgent);
     } else {
@@ -279,6 +297,14 @@ const READY = `new Promise(r => { const t0 = Date.now(); (function poll() { cons
   const cleared = await type('');
   ok(cleared.tel === null && cleared.blank && !cleared.keys.length, 'clearing the field brings the blank line back and forgets the number', JSON.stringify(cleared));
   await shoot('.ctl', path.join(OUT, 'controls.png'));
+  // With a number from the system: typing it again keeps nothing; another number is kept; clearing goes back to it.
+  await load(withSys(cases[0].data));
+  const same = await type(SYS);
+  ok(same.tel === SYS && !same.keys.length && same.field === '', "typing the system's own number keeps nothing", JSON.stringify(same));
+  const other = await type(PHONE);
+  ok(other.tel === PHONE && other.kept.join() === PHONE, 'another number is printed and kept', JSON.stringify(other));
+  const back = await type('');
+  ok(back.tel === SYS && !back.keys.length && !back.blank, 'clearing the field goes back to the number from the system', JSON.stringify(back));
   // Demo pages show a typed number but keep nothing (R3 P1).
   await go(base + 'booklet.html?demo=heavy');
   const demoT = await type(PHONE);

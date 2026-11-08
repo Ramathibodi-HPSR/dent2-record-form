@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai+Looped:wght@400;600;700&family=Prompt:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="booklet.css?v=1.4.4">
+<link rel="stylesheet" href="booklet.css?v=1.4.5">
 </head>
 <body>
 <header class="ctl noprint">
@@ -42,7 +42,7 @@
       <div class="tel-set" id="telSet">
         <label for="unitTel">เบอร์โทรหน่วยบริการ</label>
         <input type="tel" id="unitTel" maxlength="40" autocomplete="off" inputmode="tel" placeholder="เช่น 0 2xxx xxxx" aria-describedby="unitTelHelp unitTelNote">
-        <small id="unitTelHelp">กรอกครั้งเดียว เบราว์เซอร์นี้จำไว้ ใช้ที่ปกหลังและในกล่อง "ควรได้รับการรักษาโดยเร็ว" หน้า 2 <span class="nw">เว้นว่าง = เขียนด้วยมือ</span></small>
+        <small id="unitTelHelp">พิมพ์ที่ปกหลังและในกล่อง <span class="nw">"ควรได้รับการรักษาโดยเร็ว"</span> หน้า 2 กรอกเมื่อต้องการใช้เบอร์อื่น เบราว์เซอร์นี้จำไว้</small>
         <small id="unitTelNote" class="tel-note" aria-live="polite"></small>
       </div>
       <button class="btn-print" type="button" id="printBtn" disabled>พิมพ์ทั้ง 2 ด้าน</button>
@@ -58,6 +58,6 @@
 </header>
 <div class="warn noprint" id="warn" role="alert"></div>
 <main class="stage" id="stage"></main>
-<script src="booklet.js?v=1.4.4"></script>
+<script src="booklet.js?v=1.4.5"></script>
 </body>
 </html>

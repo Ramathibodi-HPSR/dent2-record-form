@@ -1936,6 +1936,9 @@ const homecareText = lvl => (lvl === 'low'
   : `แปรงฟันด้วยยาสีฟันผสมฟลูออไรด์ 1,450 ppm วันละ 2 ครั้ง · ผู้ปกครองแปรงซ้ำก่อนนอน · ขนมและเครื่องดื่มหวานนอกมื้อไม่เกินวันละ 2 ครั้ง · มาตามนัดทุก ${LEVEL[lvl].recall} เดือน`);
 // Parent booklet (one A4 sheet folded into four A5 pages, booklet.html). The data goes through localStorage
 // and holds no names (D-64); the parent writes the child's name by hand.
+// The phone number each unit gave for parents (Percy, 8 Nov 2026): the booklet's back cover and urgent box. A number
+// typed on the booklet page replaces it on that PC.
+const UNIT_TEL = { u654: '02-426-3514', u243: '02-540-5615', u321: '02-392-9277' };
 function bookletData(u, k) {
   // After a follow-up the booklet shows the latest exam (chart, findings, risk); the plan and its months stay on the
   // first exam (v1.3.1).
@@ -1953,7 +1956,7 @@ function bookletData(u, k) {
     done: r.study ? [] : rowTx(u, k, r).map(t => ({ month: r.anytime ? null : txMonth(k, t), date: toInput(t.date) })) }));
   return { v: 1, printed_on: toInput(TODAY),
     child: { study_id: k.id, school: school ? school.name : '', class: k.cls || '', sex: sexTh(k), age_text: k.birth ? ageText(k, ex.base || k.base) : '' },
-    unit: { name: u.name.split(' · ')[0] },   // TEST unit names carry the payment arm after " · "; parents never see it
+    unit: { name: u.name.split(' · ')[0], phone: UNIT_TEL[u.id] || '' },   // TEST unit names carry the payment arm after " · "; parents never see it
     exam: { date: toInput(k.base), findings_date: last ? last.exam_date : null, place: PLACE[ex.place] || '', examiner_code: ex.examiner || '',
       risk: { level: lvl, label: LEVEL[lvl].th, score: riskScore(ex), recall_months: LEVEL[lvl].recall },
       urgent: { ...ex.urgent }, needs_referral: needsReferral(ex), teeth,
@@ -1969,7 +1972,7 @@ $('#printBtn').addEventListener('click', () => {
   if (!k || !examined(k)) { toast('ยังไม่มีผลตรวจครั้งแรก'); return; }
   if (k.dirty || exK().dirty) { toast('มีผลตรวจที่ยังไม่บันทึก บันทึกผลตรวจก่อนพิมพ์สมุด'); return; }
   try { localStorage.setItem('dent2-booklet', JSON.stringify(bookletData(u, k))); } catch (e) { toast('เบราว์เซอร์ไม่ให้เก็บข้อมูลชั่วคราว พิมพ์สมุดไม่ได้'); return; }
-  const w = window.open('booklet.html?v=1.4.4', '_blank');
+  const w = window.open('booklet.html?v=1.4.5', '_blank');
   if (!w) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปของเว็บนี้แล้วกดอีกครั้ง');
 });
 

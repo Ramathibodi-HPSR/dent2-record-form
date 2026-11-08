@@ -1,4 +1,4 @@
-/* Dent-II parent booklet v1.2.1: one A4 landscape sheet, duplex (flip on short edge), folded into a 4-page A5 booklet.
+/* Dent-II parent booklet v1.3.0: one A4 landscape sheet, duplex (flip on short edge), folded into a 4-page A5 booklet.
    Side 1 (outside) = page 4 | page 1. Side 2 (inside) = page 2 | page 3.
    Black-and-white safe: every mark has a shape, pattern or word, never colour alone. */
 :root {
@@ -298,6 +298,10 @@ body {
 .page.c2 .found h3 { margin: 0 2mm 0 0; border: 0; padding: 0; }
 .page.c2 .found .srow { display: inline-grid; border-bottom: 0; padding: 0; }
 .page.c2 .urgent { grid-template-columns: minmax(0, 1fr); }
+/* decay left to fluoride and decay left to watching share one row at c2 (review R3 P7) */
+.srow.watch-all { display: none; }
+.page.c2 .srow.watch-one { display: none; }
+.page.c2 .srow.watch-all { display: grid; }
 .page.c2 .urgent > svg { display: none; }
 .page.c2 .urgent .big, .page.c2 .urgent .why { display: inline; margin-right: 1.5mm; }
 .page.f9 { font-size: 9.5pt; --fs-s: 9pt; }
