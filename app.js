@@ -556,6 +556,7 @@ async function loadAll() {
   for (const r of units) S.units[r.id] = { ...r, schools: [], examiners: [], kids: [], byId: {}, tx: [], txByKid: {}, exams: [], transfers: [], evidence: new Map() };
   for (const s of schools) S.units[s.unit_id]?.schools.push(s);
   for (const x of examiners) if (x.active) S.units[x.unit_id]?.examiners.push(x.code);
+  S.examRows = examiners;   // kappa and calibration date, for the population page's check
   const examBy = {};
   for (const e of exams) { if (e.round === 'baseline') examBy[e.study_id] = e; S.units[e.unit_id]?.exams.push(e); }
   for (const c of children) { const u = S.units[c.unit_id]; if (!u) continue; const k = kidFrom(c, examBy[c.study_id]); u.kids.push(k); u.byId[k.id] = k; }
@@ -590,8 +591,8 @@ const toastErr = e => toast('บันทึกไม่สำเร็จ · ' 
 
 /* ================================================================ auth, navigation */
 const TABS_UNIT = [['home', 'หน้าแรก'], ['kids', 'นักเรียน'], ['file', 'แฟ้มนักเรียน'], ['claims', null]];
-const TABS_RESEARCH = [['research', 'ภาพรวมทุกหน่วย']];
-const SCREENS = ['login', 'home', 'kids', 'enrol', 'file', 'claims', 'research'];
+const TABS_RESEARCH = [['research', 'ภาพรวมทุกหน่วย'], ['pop', 'ลักษณะประชากร']];
+const SCREENS = ['login', 'home', 'kids', 'enrol', 'file', 'claims', 'research', 'pop'];
 
 $('#loginForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -640,11 +641,11 @@ async function afterLogin() {
     ps.classList.toggle('is-missing', !S.prov);
     $('#provBox').hidden = false;
     S.kid = null;   // the file tab waits for a chosen child (R1-19)
-    $('#verTag').textContent = u.is_test ? 'v1.4 · หน่วยทดสอบ' : 'v1.4';
+    $('#verTag').textContent = u.is_test ? 'v1.5 · หน่วยทดสอบ' : 'v1.5';
   } else {
     fill(chip, el('i', { class: 'key key--ref' }), el('b', { text: S.me.display_name }), S.me.role === 'pi' ? 'PI' : 'ทีมวิจัย');
     $('#provBox').hidden = true;
-    $('#verTag').textContent = 'v1.4';
+    $('#verTag').textContent = 'v1.5';
   }
   $('#acctBox').hidden = false;
   show(S.me.role === 'unit' ? 'home' : 'research');
@@ -664,7 +665,7 @@ async function logout(reason) {
   await sb.auth.signOut();
   Object.assign(S, { me: null, units: {}, acct: null, kid: null, fu: null, editId: null, prov: '' });
   $('#tabs').hidden = true; $('#acctBox').hidden = true; hideSaveBar();
-  $('#verTag').textContent = 'v1.4';
+  $('#verTag').textContent = 'v1.5';
   show('login');
   if (reason) $('#lgMsg').replaceChildren(el('div', { class: 'hint', text: reason }));
 }
@@ -724,7 +725,7 @@ window.addEventListener('beforeunload', e => { const k = exK(); if (k && k.dirty
 function show(id) {
   if (!S.me) id = 'login';
   if (S.tab === 'file' && id !== 'file' && !dirtyGuard()) return;
-  for (const s of SCREENS) $('#' + s).hidden = s !== id;
+  for (const s of SCREENS) setIf('#' + s, 'hidden', s !== id);
   $$('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.getAttribute('aria-controls') === id)));
   S.tab = id;
   render(id);
@@ -738,6 +739,7 @@ function render(id, keep) {
   else if (id === 'file') renderFile();
   else if (id === 'claims') { setupClaimsForm(keep); renderClaims(); }
   else if (id === 'research') renderResearch();
+  else if (id === 'pop') renderPop();
 }
 function openKid(id, ft) { if (S.kid !== id && !dirtyGuard()) return; if (S.kid !== id) S.fu = null; S.kid = id; S.sel = 16; if (ft) S.ftab = ft; show('file'); }
 document.addEventListener('click', e => {
@@ -2615,6 +2617,340 @@ function renderResearch() {
       el('p', { class: 'small muted', text: 'ทุกหน่วยรวมกัน ใช้รหัสวิจัย ไม่มีชื่อ เลขบัตรประชาชน หรือวันเกิด (มีอายุเป็นเดือน ณ วันตรวจ)' }),
       exportButtons()));
   refreshPay();
+}
+
+/* ================================================================ RESEARCH: population characteristics (v1.5) */
+// Table 1 of the trial children, one column per unit in arm order (Percy 18 Nov 2026): enrolment items for every child,
+// oral health from the first exam of those examined. Age in completed months from the 15th of the birth month, as in
+// the CSV (no date of birth, D-64). Data-entry checks sit above the table: units enter from paper and form defaults stay
+// easily, and a unit whose primary teeth were left out or left at the chart default shows no dmft (design review 18 Nov).
+const ARM_SHORT = { control: 'กลุ่มควบคุม', cap: 'เหมาจ่ายรายหัว', ffs: 'แบ่งปันส่วนประหยัด' };
+const ARM_VAR = { control: 'var(--s-ctrl)', cap: 'var(--s-cat4)', ffs: 'var(--s-cat3a)' };
+const ARM_ORDER = { control: 0, cap: 1, ffs: 2 };
+const LV_VAR = { low: 'var(--ok)', high: 'var(--warn)', vhigh: 'var(--crit)' };
+const RISK_SHORT = {
+  r1: 'ภาวะที่ทำให้ทำความสะอาดช่องปากได้ไม่ดี หรือน้ำลายน้อย', r2: 'รอยโรคฟันผุระยะลุกลาม หรือฟันผุเป็นรู', r3: 'คราบจุลินทรีย์ที่เห็นชัดเจน',
+  r4: 'ความผิดปกติของโครงสร้างฟัน', r5: 'กินของที่มีน้ำตาลนอกมื้อ มากกว่า 2 ครั้งต่อวัน', r6: 'ใส่เครื่องมือในช่องปาก',
+  r7: 'ไม่ได้แปรงฟันด้วยยาสีฟันฟลูออไรด์ 1,000 ppm ขึ้นไป วันละ 2 ครั้ง', r8: 'พี่หรือน้องมีฟันผุ',
+};
+const NA = 'ยังใช้ไม่ได้';
+const riskHit = (k, id) => k.risk[id] === (id === 'r7' ? 'n' : 'y');   // the answer that adds points (r7 counts "no")
+const riskSaid = (k, id) => k.risk[id] === 'y' || k.risk[id] === 'n';
+const ageMo = k => (k.birth && k.examDate ? (k.examDate.getFullYear() - k.birth.getFullYear()) * 12 + k.examDate.getMonth() - k.birth.getMonth() - (k.examDate.getDate() < 15 ? 1 : 0) : null);
+const ageTh = m => { const r = Math.round(m); return `${Math.floor(r / 12)} ปี ${r % 12} เดือน`; };
+const ageOut = m => m < 72 || m >= 108;
+const avg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
+const sdev = a => { if (a.length < 2) return null; const m = avg(a); return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / (a.length - 1)); };
+const pct1 = (n, d) => (100 * n / d).toFixed(1);
+const nPct = (n, d) => (d ? `${n} (${pct1(n, d)}%)` : '–');
+const mSd = (a, dp = 2) => (a.length ? `${avg(a).toFixed(dp)} (${a.length > 1 ? sdev(a).toFixed(dp) : '–'})` : '–');
+const cnt = (a, f) => a.filter(f).length;
+const pigiExact = (k, idx) => { const v = PIGI_TEETH.filter(t => !k.pigi[t].x).map(t => k.pigi[t][idx]).filter(x => x != null); return v.length ? avg(v) : null; };
+function popOf(k) {
+  const p = { k, ex: examined(k), age: examined(k) ? ageMo(k) : null };
+  if (!p.ex) return p;
+  const live = POS.filter(q => k.teeth[q].t !== 'n'), perm = live.filter(q => k.teeth[q].t === 'p'), prim = live.filter(q => k.teeth[q].t === 'd');
+  const fpm = FPM.filter(q => k.teeth[q].t === 'p'), scored = !k.pigiSkip && pigiScored(k) > 0;
+  return Object.assign(p, { ix: indices(k), lvl: lvlOf(k), score: riskScore(k), nPerm: perm.length, nPrim: prim.length, nFpm: fpm.length,
+    primSound: prim.length > 0 && prim.every(q => !+k.teeth[q].B && !+k.teeth[q].A),
+    early: perm.some(q => k.teeth[q].B >= 1 && k.teeth[q].B <= 2),
+    seal: fpm.filter(q => needOf(q, k) === 2).length, sealed: fpm.some(q => [1, 2].includes(+k.teeth[q].A)),
+    pi: scored ? pigiExact(k, 'pi') : null, gi: scored ? pigiExact(k, 'gi') : null,
+    ref: needsReferral(k), urgent: Object.values(k.urgent).some(Boolean) });
+}
+// Primary teeth left out of the chart, or (nearly) all at the chart default: the unit's dmft is not usable.
+function primIssue(ex) {
+  const noPrim = cnt(ex, p => p.nPrim === 0), withPrim = ex.filter(p => p.nPrim > 0), sound = cnt(withPrim, p => p.primSound);
+  const none = noPrim >= Math.max(3, ex.length * 0.1), dflt = withPrim.length >= 10 && sound >= withPrim.length * 0.9;
+  return { noPrim, withPrim: withPrim.length, sound, none, dflt, bad: none || dflt };
+}
+// Hover and focus tooltip in the floating box (#ftip); content() returns its nodes.
+function hoverTip(node, content) {
+  const tip = $('#ftip');
+  if (!tip) return node;
+  const place = (x, y) => {
+    tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - tip.offsetWidth - 8)) + 'px';
+    tip.style.top = (y + 16 + tip.offsetHeight > innerHeight ? y - tip.offsetHeight - 10 : y + 16) + 'px';
+  };
+  const on = e => {
+    fill(tip, ...content()); tip.hidden = false;
+    if (e.type === 'focus') { const r = node.getBoundingClientRect(); place(r.left + r.width / 2, r.bottom); } else place(e.clientX, e.clientY);
+  };
+  const off = () => { tip.hidden = true; };
+  node.addEventListener('pointerenter', on); node.addEventListener('pointermove', e => place(e.clientX, e.clientY));
+  node.addEventListener('pointerleave', off); node.addEventListener('focus', on); node.addEventListener('blur', off);
+  return node;
+}
+const tipHead = t => el('div', { class: 'tooltip__head', text: t });
+const tipRow = (sw, label, value, tot) => el('div', { class: 'tooltip__row' + (tot ? ' tooltip__row--tot' : '') }, sw, el('span', { text: label }), el('b', { text: value }));
+const unitDot = u => el('i', { class: 'udot' + (u.ptype === 'private' ? ' udot--open' : ''), style: `--c:${ARM_VAR[u.arm]}`, 'aria-hidden': 'true' });
+const allTick = () => el('i', { class: 'dp-all dp-all--key', 'aria-hidden': 'true' });
+const SVGNS = 'http://www.w3.org/2000/svg';
+const sv = (tag, attrs = {}, ...kids) => {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) { if (v == null || v === false) continue; if (k === 'text') e.textContent = v; else e.setAttribute(k, v); }
+  for (const c of kids) if (c != null && c !== false) e.append(c);
+  return e;
+};
+// A column with a 4px rounded top, square at the baseline.
+const colPath = (x, y, w, h) => { const r = Math.min(4, h, w / 2); return `M${x} ${y + h}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + w - r}Q${x + w} ${y} ${x + w} ${y + r}V${y + h}Z`; };
+
+// Age at the first exam, all units together, in 3-month bins (a bin never crosses a birthday year); ages outside
+// 6–8 years in the warning colour; the tooltip splits each bin by unit.
+function ageChart(cols) {
+  const ps = cols[cols.length - 1].ex.filter(p => p.age != null);
+  if (!ps.length) return el('p', { class: 'small muted', text: 'ยังไม่มีผลตรวจที่มีเดือนปีเกิด' });
+  const ages = ps.map(p => p.age), lo = Math.min(72, Math.floor(Math.min(...ages) / 3) * 3), hi = Math.max(108, (Math.floor(Math.max(...ages) / 3) + 1) * 3);
+  const bins = [];
+  for (let m = lo; m < hi; m += 3) bins.push({ m, n: 0, by: {} });
+  for (const p of ps) { const b = bins[Math.floor((p.age - lo) / 3)]; b.n++; b.by[p.k.unit] = (b.by[p.k.unit] || 0) + 1; }
+  const max = Math.max(...bins.map(b => b.n)), step = [1, 2, 5, 10, 20, 25, 50, 100, 200].find(s => Math.ceil(max / s) <= 5) || 500, top = Math.ceil(max / step) * step;
+  const W = 560, H = 240, ml = 34, mr = 8, mt = 10, mb = 52, iw = W - ml - mr, ih = H - mt - mb, slot = iw / bins.length, bw = Math.min(24, slot - 4);
+  const y = v => mt + ih - (v / top) * ih;
+  const g = sv('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `อายุ ณ วันตรวจครั้งแรก ${ps.length} คน ช่วง ${Math.min(...ages)}–${Math.max(...ages)} เดือน` });
+  for (let v = 0; v <= top; v += step) g.append(sv('line', { class: v ? 'c-grid' : 'c-axis', x1: ml, x2: W - mr, y1: y(v), y2: y(v) }), sv('text', { class: 'c-tick', x: ml - 6, y: y(v) + 4, 'text-anchor': 'end', text: String(v) }));
+  for (let m = Math.ceil(lo / 12) * 12; m <= hi; m += 12) {
+    const x = ml + ((m - lo) / 3) * slot;
+    g.append(sv('line', { class: 'c-axis', x1: x, x2: x, y1: mt + ih, y2: mt + ih + 5 }), sv('text', { class: 'c-tick', x, y: mt + ih + 21, 'text-anchor': 'middle', text: `${m / 12} ปี` }));
+  }
+  g.append(sv('text', { class: 'c-tick', x: ml + iw / 2, y: H - 6, 'text-anchor': 'middle', text: 'อายุ (แท่งละ 3 เดือน)' }));
+  const order = cols.slice(0, -1).map(c => c.u);
+  bins.forEach((b, i) => {
+    const x = ml + i * slot + (slot - bw) / 2, yr = Math.floor(b.m / 12), mo = b.m % 12;
+    if (b.n) g.append(sv('path', { class: 'c-col' + (ageOut(b.m) ? ' c-col--out' : ''), d: colPath(x, y(b.n), bw, mt + ih - y(b.n)) }));
+    g.append(hoverTip(sv('rect', { class: 'c-hit', x: ml + i * slot, y: mt, width: slot, height: ih, tabindex: '0', 'aria-label': `อายุ ${b.m}–${b.m + 2} เดือน ${b.n} คน` }), () => [
+      tipHead(`${b.m}–${b.m + 2} เดือน (${yr} ปี ${mo}–${mo + 2} เดือน)${ageOut(b.m) ? ' นอกช่วง 6–8 ปี' : ''}`),
+      ...order.filter(u => b.by[u.id]).map(u => tipRow(unitDot(u), u.name, `${b.by[u.id]} คน`)),
+      tipRow(null, 'ทุกหน่วย', `${b.n} คน`, true)]));
+  });
+  const out = cnt(ps, p => ageOut(p.age));
+  return el('div', { class: 'stack' }, el('div', { class: 'chartbox' }, g),
+    out ? el('p', { class: 'legendrow' }, el('span', {}, el('i', { class: 'sw sw--out' }), `อายุนอกช่วง 6–8 ปี ${out} คน (ดูข้อสังเกตด้านล่าง)`)) : null);
+}
+// Caries risk level per unit and overall: 100% bars in the app's risk colours, labelled when the segment fits.
+function riskBars(cols) {
+  const rows = cols.filter(c => c.ex.length);
+  if (!rows.length) return el('p', { class: 'small muted', text: 'ยังไม่มีผลตรวจครั้งแรก' });
+  const lvls = ['low', 'high', 'vhigh'];
+  return el('div', { class: 'stack' },
+    el('ul', { class: 'mlegend' }, ...lvls.map(l => el('li', {}, el('i', { class: 'sw', style: `background:${LV_VAR[l]}` }), LEVEL[l].th))),
+    ...rows.map(c => {
+      const n = c.ex.length;
+      return el('div', { class: 'prow' + (c.u ? '' : ' prow--tot') },
+        el('div', { class: 'prow__lab' }, c.u ? el('span', { class: 'row', style: 'gap:6px' }, unitDot(c.u), c.u.name) : el('b', { text: 'ทุกหน่วย' }), el('span', { class: 'tiny muted', text: `ตรวจแล้ว ${n} คน` })),
+        el('div', { class: 'sbar sbar--pop' }, ...lvls.map(l => {
+          const v = cnt(c.ex, p => p.lvl === l);
+          if (!v) return null;
+          const w = 100 * v / n;
+          return hoverTip(el('span', { style: `flex:${v} 1 0;background:${LV_VAR[l]}`, tabindex: '0', 'aria-label': `${c.u ? c.u.name : 'ทุกหน่วย'} ${LEVEL[l].th} ${v} คน ${pct1(v, n)}%` }, w >= 11 ? el('b', { text: `${Math.round(w)}%` }) : null),
+            () => [tipHead(c.u ? c.u.name : 'ทุกหน่วย'), tipRow(el('i', { class: 'sw', style: `background:${LV_VAR[l]}` }), LEVEL[l].th, `${v} คน (${pct1(v, n)}%)`)]);
+        })));
+    }));
+}
+// Share of children with each of the 8 risk items: one dot per unit (nudged apart vertically so equal values stay
+// visible) and a tick for all units together, on a 0–100% scale.
+function riskDots(cols) {
+  const us = cols.slice(0, -1).filter(c => c.ex.length), tot = cols[cols.length - 1];
+  if (!us.length) return null;
+  const val = (ex, id) => { const d = cnt(ex, p => riskSaid(p.k, id)), n = cnt(ex, p => riskHit(p.k, id)); return { n, d, v: d ? 100 * n / d : null }; };
+  const off = j => (j - (us.length - 1) / 2) * 8;
+  return el('div', { class: 'stack' },
+    el('ul', { class: 'mlegend' }, ...us.map(c => el('li', {}, unitDot(c.u), `${c.u.name} · ${ARM_SHORT[c.u.arm]}`)), el('li', {}, allTick(), 'ทุกหน่วย')),
+    el('div', { class: 'dplot' },
+      el('div', { class: 'dplot__lab' }), el('div', { class: 'dplot__axis', 'aria-hidden': 'true' }, ...[0, 25, 50, 75, 100].map(t => el('span', { style: `left:${t}%`, text: `${t}%` }))),
+      ...RISK_IDS.flatMap((id, i) => {
+        const vs = us.map(c => ({ c, ...val(c.ex, id) })), all = val(tot.ex, id);
+        const row = hoverTip(el('div', { class: 'dplot__track', tabindex: '0', 'aria-label': `${RISK_SHORT[id]}: ${vs.map(x => `${x.c.u.name} ${x.v == null ? 'ไม่มีข้อมูล' : pct1(x.n, x.d) + '%'}`).join(', ')}${all.d ? `, ทุกหน่วย ${pct1(all.n, all.d)}%` : ''}` },
+          el('div', { class: 'dplot__in' },
+            all.v != null ? el('i', { class: 'dp-all', style: `left:${all.v}%` }) : null,
+            ...vs.map((x, j) => (x.v == null ? null : el('i', { class: 'udot udot--lg' + (x.c.u.ptype === 'private' ? ' udot--open' : ''), style: `--c:${ARM_VAR[x.c.u.arm]};left:${x.v}%;top:calc(50% + ${off(j)}px)` }))))),
+          () => [tipHead(`ข้อ ${i + 1} ${RISK_SHORT[id]}`), ...vs.map(x => tipRow(unitDot(x.c.u), x.c.u.name, x.d ? `${x.n}/${x.d} (${pct1(x.n, x.d)}%)` : '–')),
+            tipRow(null, 'ทุกหน่วย', all.d ? `${all.n}/${all.d} (${pct1(all.n, all.d)}%)` : '–', true)]);
+        return [el('div', { class: 'dplot__lab' }, el('span', { class: 'tiny muted', text: `ข้อ ${i + 1}` }), RISK_SHORT[id]), row];
+      })));
+}
+// Table 1. Each row: label, cell(ps, ex, col); opt rows show only when the total column has any.
+function popRows(cols) {
+  const tot = cols[cols.length - 1];
+  const ageOk = e => e.filter(p => p.age != null);
+  const rooms = ps => { const m = {}; for (const p of ps) { const r = p.k.c.school_id + '|' + p.k.cls; m[r] = (m[r] || 0) + 1; } return Object.values(m); };
+  const AGE_G = [['น้อยกว่า 6 ปี', m => m < 72, true], ['6 ปี (72–83 เดือน)', m => m >= 72 && m < 84], ['7 ปี (84–95 เดือน)', m => m >= 84 && m < 96],
+    ['8 ปี (96–107 เดือน)', m => m >= 96 && m < 108], ['9 ปีขึ้นไป', m => m >= 108, true]];
+  const ex = (label, f, o = {}) => ({ label, cell: (ps, e) => f(e), ...o });
+  const all = (label, f, o = {}) => ({ label, cell: ps => f(ps), ...o });
+  const share = (label, test, o = {}) => all(label, ps => nPct(cnt(ps, test), ps.length), { has: ps => cnt(ps, test) > 0, ...o });
+  const exShare = (label, test, o = {}) => ex(label, e => nPct(cnt(e, test), e.length), { has: (ps, e) => cnt(e, test) > 0, ...o });
+  // Rows that need the primary teeth: only units that charted them; the total marks † when a unit is left out.
+  const prim = (label, f, o = {}) => ({ label, cell: (ps, e, c) => (c.exPrim ? f(c.exPrim) + (!c.u && c.primPart ? ' †' : '') : NA), ...o });
+  const primShare = (label, test, o = {}) => prim(label, e => nPct(cnt(e, test), e.length), o);
+  const dayRange = e => { const d = e.map(p => toInput(p.k.examDate)).sort(); return d.length ? (d[0] === d[d.length - 1] ? thShort(fromInput(d[0])) : `${thShort(fromInput(d[0]))} – ${thShort(fromInput(d[d.length - 1]))}`) : '–'; };
+  return [
+    { sec: 'การลงทะเบียนและการตรวจ' },
+    all('นักเรียนที่ลงทะเบียน (คน)', ps => String(ps.length)),
+    share('ยินยอมครบ (ผู้ปกครองลงนามและเด็กยินยอม)', p => hasConsent(p.k)),
+    share('ตรวจครั้งแรกแล้ว', p => p.ex),
+    share('ขาดวันตรวจ', p => p.k.status === 'absent', { opt: true }),
+    share('ยังไม่บันทึกผลตรวจ', p => p.k.status === 'new', { opt: true }),
+    share('ถอนตัว', p => p.k.c.status === 'withdrawn', { opt: true }),
+    ex('วันตรวจครั้งแรกที่บันทึก', dayRange),
+    ex('รหัสผู้ตรวจที่บันทึก (รหัส)', e => String(new Set(e.map(p => p.k.examiner || '–')).size)),
+    all('โรงเรียน (แห่ง)', ps => String(new Set(ps.map(p => p.k.c.school_id)).size)),
+    all('ห้องเรียนที่มีนักเรียน (ห้อง)', ps => String(rooms(ps).length)),
+    all('นักเรียนต่อห้อง ค่าเฉลี่ย (ต่ำสุด–สูงสุด)', ps => { const r = rooms(ps); return r.length ? `${avg(r).toFixed(1)} (${Math.min(...r)}–${Math.max(...r)})` : '–'; }),
+    { sec: 'ลักษณะทั่วไป' },
+    share('เพศหญิง', p => p.k.c.sex === 'F'),
+    share('เพศชาย', p => p.k.c.sex === 'M'),
+    share('ไม่ได้ระบุเพศ', p => !p.k.c.sex, { opt: true }),
+    ex('อายุ ณ วันตรวจครั้งแรก (เดือน) ค่าเฉลี่ย (SD)', e => mSd(ageOk(e).map(p => p.age), 1)),
+    ex('ต่ำสุด–สูงสุด (เดือน)', e => { const a = ageOk(e).map(p => p.age); return a.length ? `${Math.min(...a)}–${Math.max(...a)}` : '–'; }, { ind: true }),
+    ...AGE_G.map(([label, t, opt]) => ex(label, e => nPct(cnt(ageOk(e), p => t(p.age)), ageOk(e).length), { ind: true, opt, has: (ps, e) => cnt(ageOk(e), p => t(p.age)) > 0 })),
+    { grp: 'สิทธิการรักษา' },
+    ...Object.entries(COV).map(([v, c]) => share(c.th, p => p.k.c.coverage === v, { ind: true, opt: v !== 'uc' })),
+    share('ยังไม่ตรวจสิทธิ', p => !COV[p.k.c.coverage], { ind: true, opt: true }),
+    share('มีภาวะหรือโรคประจำตัวที่บันทึกไว้', p => !!(p.k.c.conditions && p.k.c.conditions.trim())),
+    share('แพ้ซิลเวอร์ (ใช้ SDF ไม่ได้)', p => p.k.c.allergy_silver, { opt: true }),
+    share('แพ้ colophony (ระวังฟลูออไรด์วานิช)', p => p.k.c.allergy_colophony, { opt: true }),
+    { sec: 'สุขภาพช่องปาก ณ วันตรวจครั้งแรก (เฉพาะผู้ที่ตรวจแล้ว)' },
+    ex('ตรวจครั้งแรกแล้ว (คน)', e => String(e.length), { n: true }),
+    { grp: 'ระดับความเสี่ยงฟันผุ' },
+    ...['low', 'high', 'vhigh'].map(l => exShare(LEVEL[l].th, p => p.lvl === l, { ind: true })),
+    ex('คะแนนความเสี่ยง (0–12) ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.score), 1), { ind: true }),
+    { grp: 'ปัจจัยเสี่ยงรายข้อ (มีปัจจัยนี้)' },
+    ...RISK_IDS.map((id, i) => ex(`${i + 1}. ${RISK_SHORT[id]}`, e => nPct(cnt(e, p => riskHit(p.k, id)), cnt(e, p => riskSaid(p.k, id))), { ind: true })),
+    { grp: 'ฟันแท้' },
+    ex('DMFT ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.ix.DMFT)), { ind: true }),
+    exShare('มีประสบการณ์ฟันผุ (DMFT ≥ 1)', p => p.ix.DMFT >= 1, { ind: true }),
+    exShare('มีฟันผุที่ยังไม่ได้รักษา (D ≥ 1)', p => p.ix.D >= 1, { ind: true }),
+    exShare('มีรอยโรคเริ่มต้น (ICDAS 1–2)', p => p.early, { ind: true }),
+    ex('จำนวนฟันแท้ที่ขึ้นแล้ว (ซี่) ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.nPerm), 1), { ind: true }),
+    ex('ฟันกรามแท้ซี่แรกที่ขึ้นแล้ว (ซี่) ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.nFpm)), { ind: true }),
+    exShare('ฟันกรามแท้ซี่แรกขึ้นครบ 4 ซี่', p => p.nFpm === 4, { ind: true }),
+    exShare('ยังไม่มีฟันกรามแท้ซี่แรกขึ้น', p => p.nFpm === 0, { ind: true, opt: true }),
+    ex('ฟันกรามแท้ที่ต้องเคลือบหลุมร่องฟัน (ซี่ต่อคน) ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.seal)), { ind: true }),
+    exShare('มีสารเคลือบหลุมร่องฟันอยู่แล้ว', p => p.sealed, { ind: true, opt: true }),
+    { grp: `ฟันน้ำนม ("${NA}" = หน่วยที่ไม่ได้บันทึกฟันน้ำนม ดูข้อสังเกต)` },
+    prim('dmft ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.ix.dmft)), { ind: true }),
+    primShare('มีประสบการณ์ฟันผุ (dmft ≥ 1)', p => p.ix.dmft >= 1, { ind: true }),
+    primShare('มีประสบการณ์ฟันผุ ฟันแท้หรือฟันน้ำนม (dmft + DMFT ≥ 1)', p => p.ix.dmft + p.ix.DMFT >= 1, { ind: true }),
+    primShare('มีฟันผุที่ยังไม่ได้รักษา ฟันแท้หรือฟันน้ำนม (d + D ≥ 1)', p => p.ix.d + p.ix.D >= 1, { ind: true }),
+    { grp: 'เหงือกและคราบจุลินทรีย์' },
+    ex('ตรวจ PI/GI (คน)', e => String(cnt(e, p => p.pi != null)), { ind: true, n: true }),
+    ex('PI ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.pi).filter(v => v != null)), { ind: true }),
+    ex('GI ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.gi).filter(v => v != null)), { ind: true }),
+    exShare('ต้องส่งต่อทันตแพทย์', p => p.ref),
+    exShare('มีอาการเร่งด่วน (ปวด บวม หรือฟันผุใหญ่)', p => p.urgent, { opt: true }),
+  ];
+}
+function popTable(cols) {
+  const tot = cols[cols.length - 1];
+  const rows = popRows(cols).filter(r => !r.opt || r.has(tot.ps, tot.ex));
+  const csv = [], colName = c => (c.u ? `${c.u.name} (${ARM_SHORT[c.u.arm]})` : 'รวม');
+  const tb = el('tbody');
+  for (const r of rows) {
+    if (r.sec || r.grp) {
+      tb.append(el('tr', { class: r.sec ? 'sec' : 'grp' }, el('th', { scope: 'colgroup', colspan: String(cols.length + 1) }, el('span', { class: 't1stick', text: r.sec || r.grp }))));
+      csv.push({ 'ลักษณะ': r.sec || r.grp, ...Object.fromEntries(cols.map(c => [colName(c), ''])) });
+      continue;
+    }
+    const cells = cols.map(c => r.cell(c.ps, c.ex, c));
+    tb.append(el('tr', { class: [r.ind ? 'ind' : '', r.n ? 'nrow' : ''].join(' ').trim() || null }, el('th', { scope: 'row', text: r.label }),
+      ...cells.map((v, i) => el('td', { class: 'num' + (i === cols.length - 1 ? ' tot' : '') + (v === NA ? ' na' : ''), text: v }))));
+    csv.push({ 'ลักษณะ': r.label, ...Object.fromEntries(cols.map((c, i) => [colName(c), cells[i]])) });
+  }
+  const head = el('tr', {}, el('th', { scope: 'col', text: 'ลักษณะ' }), ...cols.map(c => el('th', { scope: 'col', class: 'num' + (c.u ? '' : ' tot') },
+    c.u ? el('span', { class: 'row', style: 'gap:6px;justify-content:flex-end;flex-wrap:nowrap' }, unitDot(c.u), c.u.name) : el('span', { text: 'รวม' }),
+    el('div', { class: 'tiny muted', text: c.u ? `${ARM_SHORT[c.u.arm]} · ${c.ps.length} คน` : `${c.ps.length} คน` }))));
+  return { node: el('div', { class: 'tablewrap t1wrap' }, el('table', { class: 't1' }, el('thead', {}, head), tb)), csv };
+}
+// What looks like a form default or a slip in data entry, per unit: a finding and its likely cause, in plain words.
+function popChecks(cols) {
+  const out = [];
+  for (const c of cols.slice(0, -1)) {
+    const u = c.u, ps = c.ps, e = c.ex, items = [], add = (f, why) => items.push({ f, why });
+    const codes = new Set(e.map(p => p.k.examiner || '–'));
+    if (e.length >= 10 && codes.size === 1) add(`ผลตรวจทั้ง ${e.length} คนใช้รหัสผู้ตรวจเดียว (${[...codes][0]})`, `หน่วยมีรหัสผู้ตรวจ ${u.examiners.length} รหัส อาจบันทึกรหัสของผู้บันทึกแทนผู้ตรวจจริง ต้องแก้ก่อนวัดความตรงกันของผู้ตรวจ (kappa)`);
+    const rooms = new Set(ps.map(p => p.k.cls)), avail = new Set(u.schools.flatMap(s => s.classes));
+    if (ps.length >= 30 && rooms.size === 1 && avail.size > 1) add(`นักเรียนทั้ง ${ps.length} คนอยู่ชั้น ${[...rooms][0]} ห้องเดียว`, `โรงเรียนมี ${avail.size} ห้อง อาจเป็นค่าตั้งต้นของแบบฟอร์มลงทะเบียน`);
+    const days = {};
+    for (const p of e) { const d = toInput(p.k.examDate); days[d] = (days[d] || 0) + 1; }
+    const dk = Object.keys(days).sort();
+    if (dk.length > 1) add(`วันตรวจครั้งแรกที่บันทึกมี ${dk.length} วัน`, `${dk.map(d => `${thShort(fromInput(d))} ${days[d]} คน`).join(', ')} ถ้าตรวจจริงวันเดียว วันที่เหล่านี้อาจเป็นวันบันทึก เพราะแบบฟอร์มตั้งต้นเป็นวันที่บันทึก อายุ ณ วันตรวจจะคลาดได้ไม่เกิน 1 เดือน`);
+    if (c.prim.none) add(`${c.prim.noPrim} จาก ${e.length} คนไม่มีฟันน้ำนมในแผนภูมิเลย`, 'เด็กวัยนี้เกือบทุกคนยังมีฟันน้ำนม น่าจะไม่ได้บันทึกฟันน้ำนม ตาราง 1 จึงไม่แสดง dmft ของหน่วยนี้');
+    if (c.prim.dflt) add(`${c.prim.sound} จาก ${c.prim.withPrim} คนที่มีฟันน้ำนมในแผนภูมิ บันทึกว่าฟันน้ำนมปกติทุกซี่`, 'ตรงกับค่าตั้งต้นของแผนภูมิ (ไม่ผุ ไม่อุด) ถ้าไม่ได้ตรวจฟันน้ำนมจริง dmft จะต่ำกว่าความจริง ตาราง 1 จึงไม่แสดง dmft ของหน่วยนี้');
+    const odd = e.filter(p => p.age != null && ageOut(p.age));
+    if (odd.length) add(`อายุนอกช่วง 6–8 ปี ${odd.length} คน`, `${odd.slice(0, 10).map(p => `${p.k.id} (${p.age} เดือน)`).join(', ')}${odd.length > 10 ? ' …' : ''} ตรวจเดือนปีเกิดกับแบบฟอร์มกระดาษ`);
+    const noSex = cnt(ps, p => !p.k.c.sex), noBirth = cnt(ps, p => !p.k.birth), noCov = cnt(ps, p => !COV[p.k.c.coverage]), noPigi = cnt(e, p => p.pi == null);
+    if (noSex) add(`ไม่ได้ระบุเพศ ${noSex} คน`, '');
+    if (noBirth) add(`ไม่มีเดือนปีเกิด ${noBirth} คน`, 'คิดอายุไม่ได้');
+    if (noCov) add(`ยังไม่ตรวจสิทธิ ${noCov} คน`, '');
+    if (noPigi) add(`ไม่ได้ตรวจ PI/GI ${noPigi} จาก ${e.length} คน`, '');
+    if (items.length) out.push({ u, items });
+  }
+  // Across units: a wide gap in risk level with no calibrated examiner is more likely the examiners than the children.
+  const big = cols.slice(0, -1).filter(c => c.ex.length >= 30).map(c => ({ c, v: 100 * cnt(c.ex, p => p.lvl === 'vhigh') / c.ex.length }));
+  const kappa = (S.examRows || []).some(x => x.kappa != null);
+  if (big.length >= 2) {
+    const hiU = big.reduce((a, b) => (b.v > a.v ? b : a)), loU = big.reduce((a, b) => (b.v < a.v ? b : a));
+    if (hiU.v - loU.v >= 30) out.push({ u: null, items: [{ f: `สัดส่วนเสี่ยงสูงมากต่างกันมากระหว่างหน่วย (${hiU.c.u.name} ${hiU.v.toFixed(0)}% กับ ${loU.c.u.name} ${loU.v.toFixed(0)}%)`,
+      why: `${kappa ? '' : 'ในระบบยังไม่มีค่า kappa ของผู้ตรวจ '}ความต่างนี้อาจมาจากผู้ตรวจมากกว่าจากเด็ก อ่านพร้อมผลการ calibrate` }] });
+  }
+  return out;
+}
+function renderPop() {
+  const ids = Object.keys(S.units).sort((a, b) => {
+    const x = S.units[a], y = S.units[b];
+    return ARM_ORDER[x.arm] - ARM_ORDER[y.arm] || (x.ptype === y.ptype ? 0 : x.ptype === 'public' ? -1 : 1) || x.letter.localeCompare(y.letter);
+  });
+  const units = ids.map(id => { const u = S.units[id], ps = u.kids.map(popOf), ex = ps.filter(p => p.ex); return { u, ps, ex, prim: primIssue(ex) }; });
+  const withData = units.filter(c => c.ps.length), empty = units.filter(c => !c.ps.length);
+  withData.forEach(c => { c.exPrim = c.ex.length && !c.prim.bad ? c.ex : null; });
+  const primOk = withData.filter(c => c.exPrim);
+  const tot = { u: null, ps: withData.flatMap(c => c.ps) };
+  tot.ex = tot.ps.filter(p => p.ex);
+  tot.exPrim = primOk.length ? primOk.flatMap(c => c.ex) : null;
+  tot.primPart = primOk.length < withData.filter(c => c.ex.length).length;
+  const cols = [...withData, tot];
+  const n = tot.ps.length, e = tot.ex, TARGET = 600;
+  const t1 = popTable(cols), checks = popChecks(cols), nChecks = checks.reduce((a, x) => a + x.items.length, 0);
+  const ages = e.map(p => p.age).filter(v => v != null);
+  const fig = (label, value, unitTxt, sub) => el('div', { class: 'fig' }, el('span', { class: 'fig__label', text: label }), el('span', { class: 'fig__value' }, value, unitTxt ? el('small', { text: unitTxt }) : null), sub ? el('span', { class: 'fig__sub', text: sub }) : null);
+  const card = (title, sub, body) => el('section', { class: 'card stack' }, el('h3', { text: title }), sub ? el('p', { class: 'small muted', text: sub }) : null, body);
+  const notes = ['จำนวน (ร้อยละ) หรือค่าเฉลี่ย (SD) ร้อยละคิดจากนักเรียนที่มีข้อมูลข้อนั้น',
+    'ข้อมูลเมื่อลงทะเบียนใช้นักเรียนทุกคน ผลตรวจใช้เฉพาะผู้ที่ตรวจครั้งแรกแล้ว',
+    'อายุนับเดือนเต็มจากวันที่ 15 ของเดือนเกิด เหมือนใน CSV',
+    'ปัจจัยเสี่ยงข้อ 7 กลับคำจากแบบฟอร์ม นับผู้ที่ตอบว่าไม่ได้แปรง',
+    tot.exPrim && tot.primPart ? `† รวมเฉพาะหน่วยที่บันทึกฟันน้ำนม: ${primOk.map(c => `${c.u.name} ${c.ex.length} คน`).join(', ')}` : null,
+    empty.length ? `ยังไม่มีข้อมูล: ${empty.map(c => `${c.u.name} (${ARM_SHORT[c.u.arm]})`).join(', ')}` : null].filter(Boolean);
+  fill($('#pop'),
+    el('section', {},
+      el('p', { class: 'eyebrow', text: 'ทีมวิจัย · ข้อมูลเมื่อลงทะเบียนและผลตรวจครั้งแรก' }),
+      el('h1', { class: 'h-unit', text: 'ลักษณะประชากร' }),
+      el('p', { class: 'small muted', text: `${loadedText()} · มีข้อมูลแล้ว ${withData.length} จาก ${ids.length} หน่วย · ไม่มีชื่อหรือเลขบัตรประชาชน` }),
+      el('div', { class: 'money__figs popfigs' },
+        el('div', { class: 'fig fig--hero' }, el('span', { class: 'fig__label', text: 'นักเรียนที่ลงทะเบียน' }), el('span', { class: 'fig__value' }, fmt(n), el('small', { text: 'คน' })),
+          el('span', { class: 'meter', style: 'margin-top:6px', role: 'img', 'aria-label': `${n} จากเป้าหมาย ${TARGET} คน` }, el('span', { style: `width:${Math.min(100, 100 * n / TARGET)}%` })),
+          el('span', { class: 'fig__sub', text: `เป้าหมาย ${TARGET} คน (6 หน่วย)` })),
+        fig('ตรวจครั้งแรกแล้ว', fmt(e.length), 'คน', n ? `${pct1(e.length, n)}% ของผู้ลงทะเบียน` : ''),
+        fig('เพศหญิง', n ? `${pct1(cnt(tot.ps, p => p.k.c.sex === 'F'), n)}%` : '–', '', `${cnt(tot.ps, p => p.k.c.sex === 'F')} คน`),
+        fig('อายุเฉลี่ย', ages.length ? ageTh(avg(ages)) : '–', '', ages.length ? `ณ วันตรวจครั้งแรก ${Math.min(...ages)}–${Math.max(...ages)} เดือน` : ''),
+        fig('เสี่ยงสูงหรือสูงมาก', e.length ? `${pct1(cnt(e, p => p.lvl !== 'low'), e.length)}%` : '–', '', `ของ ${fmt(e.length)} คนที่ตรวจแล้ว`)),
+      nChecks ? el('p', { class: 'hint' }, `มีข้อสังเกตเรื่องการบันทึกข้อมูล ${nChecks} ข้อ บางข้อทำให้ตัวเลขบางแถวยังใช้ไม่ได้ เช่น dmft `,
+        el('button', { class: 'linkbtn', type: 'button', text: 'ดูข้อสังเกต', onclick: () => $('#popChecks').scrollIntoView({ behavior: 'smooth', block: 'start' }) })) : null),
+    el('div', { class: 'grid g2' },
+      card('อายุ ณ วันตรวจครั้งแรก', `${ages.length} คน ทุกหน่วยรวมกัน ชี้หรือแตะที่แท่งเพื่อดูแยกหน่วย`, ageChart(cols)),
+      card('ระดับความเสี่ยงฟันผุ', 'จากแบบประเมิน 8 ข้อ ณ วันตรวจครั้งแรก', riskBars(cols))),
+    e.length ? card('ปัจจัยเสี่ยงฟันผุรายข้อ', 'ร้อยละของนักเรียนที่มีปัจจัยนี้ แยกหน่วย ชี้หรือแตะที่แถวเพื่อดูจำนวน', riskDots(cols)) : null,
+    el('section', { id: 'popChecks' }, el('h2', { text: 'ข้อสังเกตเรื่องการบันทึกข้อมูล' }),
+      el('p', { class: 'small muted', text: 'ระบบหาจากข้อมูลที่บันทึก ไม่ได้แปลว่าผิดเสมอ ทีมวิจัยตรวจกับแบบฟอร์มกระดาษของหน่วย แล้วให้หน่วยแก้ในแฟ้มนักเรียน' }),
+      checks.length ? el('div', { class: 'grid g2' }, ...checks.map(x => el('div', { class: 'card stack' },
+        el('h3', {}, x.u ? el('span', { class: 'row', style: 'gap:8px' }, unitDot(x.u), x.u.name) : 'ระหว่างหน่วย'),
+        el('ul', { class: 'olist chk-list' }, ...x.items.map(t => el('li', {}, el('b', { text: t.f }), t.why ? el('div', { class: 'small muted', text: t.why }) : null))))))
+        : el('p', { class: 'small', text: 'ไม่พบข้อสังเกต' })),
+    el('section', {},
+      el('div', { class: 'row between' }, el('h2', { text: 'ตาราง 1 ลักษณะประชากรแยกหน่วย' }),
+        el('button', { class: 'btn', type: 'button', text: 'CSV ตาราง 1', onclick: () => { download(`dent2_table1_all_${toInput(new Date())}.csv`, toCsv(t1.csv)); toast(`ดาวน์โหลดตาราง 1 แล้ว ${t1.csv.length} แถว`); } })),
+      el('ul', { class: 'small muted t1notes' }, ...notes.map(t => el('li', { text: t }))),
+      t1.node));
 }
 
 /* ================================================================ boot */
