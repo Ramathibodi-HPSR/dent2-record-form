@@ -2619,7 +2619,7 @@ function renderResearch() {
   refreshPay();
 }
 
-/* ================================================================ RESEARCH: population characteristics (v1.5) */
+/* ================================================================ RESEARCH: population characteristics (v1.5; checks trimmed in v1.5.1) */
 // Table 1 of the trial children, one column per unit in arm order (Percy 18 Nov 2026): enrolment items for every child,
 // oral health from the first exam of those examined. Age in completed months from the 15th of the birth month, as in
 // the CSV (no date of birth, D-64). Data-entry checks sit above the table: units enter from paper and form defaults stay
@@ -2828,7 +2828,7 @@ function popRows(cols) {
     exShare('ยังไม่มีฟันกรามแท้ซี่แรกขึ้น', p => p.nFpm === 0, { ind: true, opt: true }),
     ex('ฟันกรามแท้ที่ต้องเคลือบหลุมร่องฟัน (ซี่ต่อคน) ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.seal)), { ind: true }),
     exShare('มีสารเคลือบหลุมร่องฟันอยู่แล้ว', p => p.sealed, { ind: true, opt: true }),
-    { grp: `ฟันน้ำนม ("${NA}" = หน่วยที่ไม่ได้บันทึกฟันน้ำนม ดูข้อสังเกต)` },
+    { grp: `ฟันน้ำนม (โครงการไม่ได้กำหนดให้บันทึก "${NA}" = หน่วยไม่ได้บันทึกฟันน้ำนม หรือปล่อยไว้ตามค่าตั้งต้นของแผนภูมิ)` },
     prim('dmft ค่าเฉลี่ย (SD)', e => mSd(e.map(p => p.ix.dmft)), { ind: true }),
     primShare('มีประสบการณ์ฟันผุ (dmft ≥ 1)', p => p.ix.dmft >= 1, { ind: true }),
     primShare('มีประสบการณ์ฟันผุ ฟันแท้หรือฟันน้ำนม (dmft + DMFT ≥ 1)', p => p.ix.dmft + p.ix.DMFT >= 1, { ind: true }),
@@ -2867,16 +2867,12 @@ function popChecks(cols) {
   const out = [];
   for (const c of cols.slice(0, -1)) {
     const u = c.u, ps = c.ps, e = c.ex, items = [], add = (f, why) => items.push({ f, why });
-    const codes = new Set(e.map(p => p.k.examiner || '–'));
-    if (e.length >= 10 && codes.size === 1) add(`ผลตรวจทั้ง ${e.length} คนใช้รหัสผู้ตรวจเดียว (${[...codes][0]})`, `หน่วยมีรหัสผู้ตรวจ ${u.examiners.length} รหัส อาจบันทึกรหัสของผู้บันทึกแทนผู้ตรวจจริง ต้องแก้ก่อนวัดความตรงกันของผู้ตรวจ (kappa)`);
     const rooms = new Set(ps.map(p => p.k.cls)), avail = new Set(u.schools.flatMap(s => s.classes));
     if (ps.length >= 30 && rooms.size === 1 && avail.size > 1) add(`นักเรียนทั้ง ${ps.length} คนอยู่ชั้น ${[...rooms][0]} ห้องเดียว`, `โรงเรียนมี ${avail.size} ห้อง อาจเป็นค่าตั้งต้นของแบบฟอร์มลงทะเบียน`);
     const days = {};
     for (const p of e) { const d = toInput(p.k.examDate); days[d] = (days[d] || 0) + 1; }
     const dk = Object.keys(days).sort();
     if (dk.length > 1) add(`วันตรวจครั้งแรกที่บันทึกมี ${dk.length} วัน`, `${dk.map(d => `${thShort(fromInput(d))} ${days[d]} คน`).join(', ')} ถ้าตรวจจริงวันเดียว วันที่เหล่านี้อาจเป็นวันบันทึก เพราะแบบฟอร์มตั้งต้นเป็นวันที่บันทึก อายุ ณ วันตรวจจะคลาดได้ไม่เกิน 1 เดือน`);
-    if (c.prim.none) add(`${c.prim.noPrim} จาก ${e.length} คนไม่มีฟันน้ำนมในแผนภูมิเลย`, 'เด็กวัยนี้เกือบทุกคนยังมีฟันน้ำนม น่าจะไม่ได้บันทึกฟันน้ำนม ตาราง 1 จึงไม่แสดง dmft ของหน่วยนี้');
-    if (c.prim.dflt) add(`${c.prim.sound} จาก ${c.prim.withPrim} คนที่มีฟันน้ำนมในแผนภูมิ บันทึกว่าฟันน้ำนมปกติทุกซี่`, 'ตรงกับค่าตั้งต้นของแผนภูมิ (ไม่ผุ ไม่อุด) ถ้าไม่ได้ตรวจฟันน้ำนมจริง dmft จะต่ำกว่าความจริง ตาราง 1 จึงไม่แสดง dmft ของหน่วยนี้');
     const odd = e.filter(p => p.age != null && ageOut(p.age));
     if (odd.length) add(`อายุนอกช่วง 6–8 ปี ${odd.length} คน`, `${odd.slice(0, 10).map(p => `${p.k.id} (${p.age} เดือน)`).join(', ')}${odd.length > 10 ? ' …' : ''} ตรวจเดือนปีเกิดกับแบบฟอร์มกระดาษ`);
     const noSex = cnt(ps, p => !p.k.c.sex), noBirth = cnt(ps, p => !p.k.birth), noCov = cnt(ps, p => !COV[p.k.c.coverage]), noPigi = cnt(e, p => p.pi == null);
@@ -2934,7 +2930,7 @@ function renderPop() {
         fig('เพศหญิง', n ? `${pct1(cnt(tot.ps, p => p.k.c.sex === 'F'), n)}%` : '–', '', `${cnt(tot.ps, p => p.k.c.sex === 'F')} คน`),
         fig('อายุเฉลี่ย', ages.length ? ageTh(avg(ages)) : '–', '', ages.length ? `ณ วันตรวจครั้งแรก ${Math.min(...ages)}–${Math.max(...ages)} เดือน` : ''),
         fig('เสี่ยงสูงหรือสูงมาก', e.length ? `${pct1(cnt(e, p => p.lvl !== 'low'), e.length)}%` : '–', '', `ของ ${fmt(e.length)} คนที่ตรวจแล้ว`)),
-      nChecks ? el('p', { class: 'hint' }, `มีข้อสังเกตเรื่องการบันทึกข้อมูล ${nChecks} ข้อ บางข้อทำให้ตัวเลขบางแถวยังใช้ไม่ได้ เช่น dmft `,
+      nChecks ? el('p', { class: 'hint' }, `มีข้อสังเกตเรื่องการบันทึกข้อมูล ${nChecks} ข้อ `,
         el('button', { class: 'linkbtn', type: 'button', text: 'ดูข้อสังเกต', onclick: () => $('#popChecks').scrollIntoView({ behavior: 'smooth', block: 'start' }) })) : null),
     el('div', { class: 'grid g2' },
       card('อายุ ณ วันตรวจครั้งแรก', `${ages.length} คน ทุกหน่วยรวมกัน ชี้หรือแตะที่แท่งเพื่อดูแยกหน่วย`, ageChart(cols)),
